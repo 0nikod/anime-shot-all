@@ -5,7 +5,7 @@
 ## 启动
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run anime-shot-all
+uv run anime-shot-all
 ```
 
 默认地址：
@@ -17,7 +17,7 @@ http://127.0.0.1:7860
 如需指定端口：
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run anime-shot-all --port 7861
+uv run anime-shot-all --port 7861
 ```
 
 ## 基本流程
@@ -68,7 +68,7 @@ work_dir/
 ## 验证
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run pytest
-UV_CACHE_DIR=/tmp/uv-cache uv run python -m compileall anime_shot_all tests
-UV_CACHE_DIR=/tmp/uv-cache uv run python -c 'from anime_shot_all.gui import build_app; print(type(build_app()).__name__)'
+uv run pytest
+uv run python -m compileall anime_shot_all tests
+uv run python -c 'from anime_shot_all.gui import build_app; print(type(build_app()).__name__)'
 ```
