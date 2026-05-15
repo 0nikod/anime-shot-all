@@ -45,6 +45,8 @@ work_dir/
   frames_dedup/
   rejected_duplicates/
   crops/
+  models/
+    yolo/
   configs/
     default.yaml
     params.yaml
@@ -62,7 +64,7 @@ work_dir/
 - `ignore_ranges` 只用于截帧阶段跳过时间段，不参与去重或裁剪分组。
 - 不实现 OP / ED 自动识别、单独目录、单独去重或单独裁剪。
 - 去重采用 pHash，算法只生成建议，最终结果以人工确认后的 `dedup_state.json` 为准。
-- YOLO 裁剪兼容 Ultralytics `.pt` 权重，但不内置模型文件，需要在 GUI 中填写本机模型路径。
+- YOLO 裁剪兼容 Ultralytics `.pt` 权重。GUI 内置 `Bingsu/adetailer` 的 face/person 预设，可自动下载到 `work_dir/models/yolo/`；也可以填写本机 `.pt` 路径覆盖预设。
 - 所有阶段都采用复制或生成新文件，不删除源视频或源图片。
 
 ## 验证

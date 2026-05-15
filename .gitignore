@@ -15,6 +15,7 @@ frames_raw/
 frames_dedup/
 rejected_duplicates/
 crops/
+models/
 configs/
 logs/
 states/

@@ -12,6 +12,7 @@ from PIL import Image
 from .config import resolve_work_path
 from .files import collect_images, parse_episode_id, relative_to_or_absolute
 from .logging_utils import write_csv
+from .yolo_models import resolve_yolo_model_path
 
 
 CROP_LOG_FIELDS = [
@@ -84,8 +85,12 @@ def run_crop(work_dir: Path, config: dict[str, Any], input_dir: Path | None = No
     output_dir.mkdir(parents=True, exist_ok=True)
     rng = random.Random(int(params.get("random_seed", 42)))
 
-    body_model = _load_model(config["yolo"].get("body_model_path", "")) if _needs_body_detection(config) else None
-    face_model = _load_model(config["yolo"].get("face_model_path", "")) if _needs_face_detection(config) else None
+    body_model_path = resolve_yolo_model_path(work_dir, config["yolo"], "body") if _needs_body_detection(config) else None
+    face_model_path = resolve_yolo_model_path(work_dir, config["yolo"], "face") if _needs_face_detection(config) else None
+    config["yolo"]["body_model_path"] = str(body_model_path or config["yolo"].get("body_model_path", ""))
+    config["yolo"]["face_model_path"] = str(face_model_path or config["yolo"].get("face_model_path", ""))
+    body_model = _load_model(body_model_path) if body_model_path else None
+    face_model = _load_model(face_model_path) if face_model_path else None
 
     rows: list[dict[str, object]] = []
     saved = 0
@@ -323,12 +328,12 @@ def _detect(model: Any, image_path: Path, config: dict[str, Any], kind: str) -> 
     return detections
 
 
-def _load_model(model_path: str) -> Any:
+def _load_model(model_path: str | Path) -> Any:
     if not model_path:
         return None
     from ultralytics import YOLO
 
-    return YOLO(model_path)
+    return YOLO(str(model_path))
 
 
 def _needs_body_detection(config: dict[str, Any]) -> bool:

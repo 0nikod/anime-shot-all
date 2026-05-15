@@ -97,6 +97,10 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     "yolo": {
         "body_model_path": "",
         "face_model_path": "",
+        "body_model_preset": "bingsu/adetailer/person_yolov8n-seg.pt",
+        "face_model_preset": "bingsu/adetailer/face_yolov8n.pt",
+        "auto_download": True,
+        "model_dir": "models/yolo",
         "conf": 0.35,
         "imgsz": 960,
         "body_class_id": 0,
