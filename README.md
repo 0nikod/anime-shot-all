@@ -34,13 +34,12 @@ uv run anime-shot-all --port 7861
 → 裁剪输出 PNG
 ```
 
-所有项目相关配置、状态、日志和输出默认归档在 `work_dir` 下。视频源可以放在 `work_dir/videos/`，也可以通过 `video_dir` 指向外部目录。
+默认情况下，项目状态和输出归档到源码根目录下的 `./work_dir/`，视频源目录使用源码根目录下的 `./video_dir/`，避免把运行态文件散落到项目根目录。也可以在 GUI 中改成任意外部路径。
 
 ## 输出结构
 
 ```text
 work_dir/
-  videos/
   frames_raw/
   frames_dedup/
   rejected_duplicates/
@@ -57,6 +56,9 @@ work_dir/
   states/
     ignore_ranges.json
     dedup_state.json
+
+video_dir/
+  *.mp4 / *.mkv / ...
 ```
 
 ## 当前边界

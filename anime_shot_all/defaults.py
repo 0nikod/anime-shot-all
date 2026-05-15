@@ -13,8 +13,8 @@ from typing import Any
 
 BUILTIN_DEFAULTS: dict[str, Any] = {
     "project": {
-        "work_dir": "",
-        "video_dir": "videos",
+        "work_dir": "work_dir",
+        "video_dir": "../video_dir",
         "output_dir": ".",
         "supported_video_ext": [
             ".mp4",
