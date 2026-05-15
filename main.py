@@ -1,5 +1,4 @@
-def main():
-    print("Hello from anime-shot-all!")
+from anime_shot_all.cli import main
 
 
 if __name__ == "__main__":

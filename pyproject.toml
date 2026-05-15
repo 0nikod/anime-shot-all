@@ -1,7 +1,40 @@
 [project]
 name = "anime-shot-all"
 version = "0.1.0"
-description = "Add your description here"
+description = "Gradio tool for collecting, deduplicating, and cropping anime training images"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "gradio>=4.44",
+    "imagehash>=4.3",
+    "numpy>=1.26",
+    "opencv-python>=4.10",
+    "pillow>=10.4",
+    "pyyaml>=6.0",
+    "ultralytics>=8.3",
+]
+
+[project.scripts]
+anime-shot-all = "anime_shot_all.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
