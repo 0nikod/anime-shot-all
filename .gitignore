@@ -9,13 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# Anime Shot All generated project artifacts
-videos/
-frames_raw/
-frames_dedup/
-rejected_duplicates/
-crops/
-models/
-configs/
-logs/
-states/
+# Anime Shot All default local data directories
+work_dir/
+video_dir/

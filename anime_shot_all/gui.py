@@ -151,9 +151,9 @@ def build_app() -> gr.Blocks:
 
         with gr.Tab("工作目录 / 视频 / 忽略区间 / 参数"):
             with gr.Row():
-                work_dir = gr.Textbox(label="工作目录 work_dir", placeholder="/data/anime_dataset/project_a")
+                work_dir = gr.Textbox(label="工作目录 work_dir", value="./work_dir", placeholder="./work_dir")
                 open_work_dir = gr.Button("初始化 / 打开工作目录", variant="primary")
-            video_dir = gr.Textbox(label="视频文件夹 video_dir")
+            video_dir = gr.Textbox(label="视频文件夹 video_dir", value="./video_dir")
             with gr.Row():
                 scan_video_btn = gr.Button("扫描视频")
                 load_params_btn = gr.Button("加载 params.yaml")
