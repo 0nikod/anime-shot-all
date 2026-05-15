@@ -42,6 +42,99 @@ from .video import VideoInfo, scan_videos, videos_as_dicts, videos_to_rows
 
 IGNORE_HEADERS = ["episode_id", "video_name", "ignore_start", "ignore_end", "label", "enabled", "notes"]
 VIDEO_HEADERS = ["episode_id", "video_path", "video_name", "duration_sec", "fps", "width", "height"]
+ASPECT_OPTIONS = ["original", "square", "portrait_2_3", "portrait_3_4", "portrait_9_16", "landscape_16_9", "landscape_4_3", "random"]
+
+PARAM_SCHEMA: dict[str, dict[str, Any]] = {
+    "extract_output": {"component": "textbox", "label": "输出 frames_raw 文件夹", "info": "PNG 截帧保存目录。"},
+    "interval": {"component": "number", "label": "interval", "value": 0.25, "info": "采样间隔秒数；越小检查越频繁。"},
+    "diff_threshold": {"component": "number", "label": "diff_threshold", "value": 5, "info": "画面差异阈值；越低保存越多。"},
+    "max_gap": {"component": "number", "label": "max_gap", "value": 2.0, "info": "最长强制保存间隔秒数。"},
+    "png_compression": {"component": "slider", "label": "png_compression", "value": 3, "minimum": 0, "maximum": 9, "step": 1, "info": "PNG 压缩等级；越高越慢。"},
+    "min_width": {"component": "number", "label": "min_width", "value": 0, "info": "输出最小宽度；0 表示不放大。"},
+    "crop_bottom": {"component": "number", "label": "crop_bottom", "value": 0, "info": "从底部裁掉像素，可避开硬字幕。"},
+    "resize_width_for_diff": {"component": "number", "label": "resize_width_for_diff", "value": 320, "info": "差异计算缩放宽度；越小越快。"},
+    "scene_diff_method": {"component": "dropdown", "label": "scene_diff_method", "value": "gray_mean_absdiff", "choices": ["gray_mean_absdiff"], "info": "当前支持灰度平均绝对差。"},
+    "reset_diff_after_ignore": {"component": "checkbox", "label": "reset_diff_after_ignore", "value": True, "info": "离开忽略区间后重置 diff 基准。"},
+    "dedup_input": {"component": "textbox", "label": "输入图片目录", "info": "通常为 frames_raw。"},
+    "dedup_output": {"component": "textbox", "label": "输出 frames_dedup 目录", "info": "人工确认后复制保留图片。"},
+    "dedup_scope": {"component": "dropdown", "label": "dedup_scope", "value": "per_episode", "choices": ["per_episode", "global", "custom"], "info": "per_episode 更保守；global 更激进。"},
+    "episode_filter": {"component": "textbox", "label": "episode_filter", "value": "all", "info": "all 或 ep01 等单集编号。"},
+    "hash_threshold": {"component": "number", "label": "hash_threshold", "value": 5, "info": "pHash 距离阈值；越大越激进。"},
+    "hash_size": {"component": "number", "label": "hash_size", "value": 8, "info": "pHash 尺寸；越大越细。"},
+    "hash_crop": {"component": "dropdown", "label": "hash_crop", "value": "center", "choices": ["center", "full"], "info": "center 更关注主体区域。"},
+    "hash_resize_width": {"component": "number", "label": "hash_resize_width", "value": 256, "info": "hash 前缩放宽度；越小越快。"},
+    "num_workers": {"component": "number", "label": "num_workers", "value": -1, "info": "-1 表示自动选择。"},
+    "export_rejected": {"component": "checkbox", "label": "export_rejected_duplicates", "value": True, "info": "复制被去重图片便于复查。"},
+    "crop_input": {"component": "textbox", "label": "输入图片文件夹", "info": "通常为 frames_dedup。"},
+    "crop_output": {"component": "textbox", "label": "输出 crops 文件夹", "info": "最终 PNG 裁剪输出目录。"},
+    "crop_mode": {"component": "checkbox_group", "label": "输出类型", "choices": ["full", "hard_split", "face", "body", "background", "random_crop"], "value": ["full", "hard_split", "face", "body", "background", "random_crop"], "info": "未勾选的类型不会输出，也不会触发对应检测。"},
+    "output_strategy": {"component": "dropdown", "label": "输出策略", "value": "fixed", "choices": ["fixed", "random_weighted"], "info": "fixed 全部尝试；random_weighted 按权重抽样。"},
+    "weight_full": {"component": "number", "label": "full weight", "value": 0, "info": "随机策略下 full 权重。"},
+    "weight_hard": {"component": "number", "label": "hard_split weight", "value": 0, "info": "随机策略下硬裁权重。"},
+    "weight_face": {"component": "number", "label": "face weight", "value": 30, "info": "随机策略下脸部权重。"},
+    "weight_body": {"component": "number", "label": "body weight", "value": 30, "info": "随机策略下身体权重。"},
+    "weight_background": {"component": "number", "label": "background weight", "value": 20, "info": "随机策略下背景权重。"},
+    "weight_random": {"component": "number", "label": "random_crop weight", "value": 20, "info": "随机策略下随机裁剪权重。"},
+    "body_model_path": {"component": "textbox", "label": "body YOLO 权重", "info": "body/background/avoid_body 需要。"},
+    "face_model_path": {"component": "textbox", "label": "face YOLO 权重", "info": "face 裁剪需要。"},
+    "conf": {"component": "number", "label": "conf", "value": 0.35, "info": "检测置信度阈值。"},
+    "imgsz": {"component": "number", "label": "imgsz", "value": 960, "info": "YOLO 推理输入尺寸。"},
+    "body_class_id": {"component": "number", "label": "body class id", "value": 0, "info": "body/person 类别 ID。"},
+    "face_class_id": {"component": "number", "label": "face class id", "value": 0, "info": "face_all_classes 关闭时生效。"},
+    "face_all_classes": {"component": "checkbox", "label": "face all classes", "value": True, "info": "启用后 face 模型所有类别都接受。"},
+    "face_aspect": {"component": "dropdown", "label": "face aspect", "value": "square", "choices": ASPECT_OPTIONS, "info": "face 输出比例。"},
+    "body_aspect": {"component": "dropdown", "label": "body aspect", "value": "portrait_2_3", "choices": ASPECT_OPTIONS, "info": "body 输出比例。"},
+    "background_aspect": {"component": "dropdown", "label": "background aspect", "value": "landscape_16_9", "choices": ASPECT_OPTIONS, "info": "background 输出比例。"},
+    "random_seed": {"component": "number", "label": "random seed", "value": 42, "info": "控制随机裁剪和随机输出复现。"},
+    "random_aspect_pool": {"component": "checkbox_group", "label": "random crop aspect pool", "choices": ["1:1", "2:3", "3:4", "9:16", "16:9", "4:3"], "value": ["1:1", "2:3", "16:9"], "info": "随机裁剪可选比例池。"},
+    "face_padding": {"component": "number", "label": "face_padding", "value": 0.5, "info": "脸部框外扩比例，避免只裁五官。"},
+    "body_padding_x": {"component": "number", "label": "body_padding_x", "value": 0.18, "info": "身体框水平外扩比例。"},
+    "body_padding_y": {"component": "number", "label": "body_padding_y", "value": 0.25, "info": "身体框垂直外扩比例。"},
+    "background_exclusion_padding": {"component": "number", "label": "background_exclusion_padding", "value": 0.15, "info": "人物禁区外扩比例。"},
+    "background_max_overlap": {"component": "number", "label": "background_max_overlap", "value": 0.05, "info": "背景 crop 允许重叠上限。"},
+    "min_crop_size": {"component": "number", "label": "min_crop_size", "value": 128, "info": "小于该尺寸的 crop 跳过。"},
+    "max_side": {"component": "number", "label": "max_side", "value": 2048, "info": "输出最长边上限。"},
+    "crop_png_compression": {"component": "slider", "label": "png_compression", "value": 3, "minimum": 0, "maximum": 9, "step": 1, "info": "裁剪 PNG 压缩等级。"},
+    "target_crops_per_image": {"component": "number", "label": "target_crops_per_image", "value": 3, "info": "随机权重策略每图最多输出数。"},
+}
+
+
+def _param_controls(names: list[str], columns: int = 3) -> dict[str, Any]:
+    controls: dict[str, Any] = {}
+    for start in range(0, len(names), columns):
+        row_names = names[start : start + columns]
+        with gr.Row():
+            for name in row_names:
+                controls[name] = _param_component(name)
+    return controls
+
+
+def _param_component(name: str) -> Any:
+    spec = PARAM_SCHEMA[name]
+    kwargs = {
+        "label": spec.get("label", name),
+        "value": spec.get("value"),
+        "info": spec.get("info"),
+    }
+    component = spec["component"]
+    if component == "textbox":
+        return gr.Textbox(**kwargs)
+    if component == "number":
+        return gr.Number(**kwargs)
+    if component == "checkbox":
+        return gr.Checkbox(**kwargs)
+    if component == "dropdown":
+        return gr.Dropdown(spec["choices"], **kwargs)
+    if component == "checkbox_group":
+        return gr.CheckboxGroup(spec["choices"], **kwargs)
+    if component == "slider":
+        return gr.Slider(
+            minimum=spec["minimum"],
+            maximum=spec["maximum"],
+            step=spec["step"],
+            **kwargs,
+        )
+    raise ValueError(f"unsupported parameter component: {component}")
 
 
 def build_app() -> gr.Blocks:
@@ -80,35 +173,60 @@ def build_app() -> gr.Blocks:
             setup_log = gr.Textbox(label="日志窗口", lines=8)
 
         with gr.Tab("截帧"):
-            with gr.Row():
-                extract_output = gr.Textbox(label="输出 frames_raw 文件夹")
-                interval = gr.Number(label="interval", value=0.25)
-                diff_threshold = gr.Number(label="diff_threshold", value=5)
-                max_gap = gr.Number(label="max_gap", value=2.0)
-            with gr.Row():
-                png_compression = gr.Slider(label="png_compression", minimum=0, maximum=9, step=1, value=3)
-                min_width = gr.Number(label="min_width", value=0)
-                crop_bottom = gr.Number(label="crop_bottom", value=0)
-                resize_width_for_diff = gr.Number(label="resize_width_for_diff", value=320)
-            scene_diff_method = gr.Dropdown(["gray_mean_absdiff"], label="scene_diff_method", value="gray_mean_absdiff")
-            reset_diff_after_ignore = gr.Checkbox(label="reset_diff_after_ignore", value=True)
+            extract_output = _param_component("extract_output")
+            with gr.Accordion("截帧参数", open=True):
+                extract_params = _param_controls(
+                    [
+                        "interval",
+                        "diff_threshold",
+                        "max_gap",
+                        "png_compression",
+                        "min_width",
+                        "crop_bottom",
+                        "resize_width_for_diff",
+                        "scene_diff_method",
+                        "reset_diff_after_ignore",
+                    ],
+                    columns=3,
+                )
+                interval = extract_params["interval"]
+                diff_threshold = extract_params["diff_threshold"]
+                max_gap = extract_params["max_gap"]
+                png_compression = extract_params["png_compression"]
+                min_width = extract_params["min_width"]
+                crop_bottom = extract_params["crop_bottom"]
+                resize_width_for_diff = extract_params["resize_width_for_diff"]
+                scene_diff_method = extract_params["scene_diff_method"]
+                reset_diff_after_ignore = extract_params["reset_diff_after_ignore"]
             extract_btn = gr.Button("开始截帧", variant="primary")
             extract_log = gr.Textbox(label="日志窗口", lines=8)
 
         with gr.Tab("去重"):
             with gr.Row():
-                dedup_input = gr.Textbox(label="输入图片目录")
-                dedup_output = gr.Textbox(label="输出 frames_dedup 目录")
-            with gr.Row():
-                dedup_scope = gr.Dropdown(["per_episode", "global", "custom"], label="dedup_scope", value="per_episode")
-                episode_filter = gr.Textbox(label="episode_filter", value="all")
-                hash_threshold = gr.Number(label="hash_threshold", value=5)
-                hash_size = gr.Number(label="hash_size", value=8)
-            with gr.Row():
-                hash_crop = gr.Dropdown(["center", "full"], label="hash_crop", value="center")
-                hash_resize_width = gr.Number(label="hash_resize_width", value=256)
-                num_workers = gr.Number(label="num_workers", value=-1)
-                export_rejected = gr.Checkbox(label="export_rejected_duplicates", value=True)
+                dedup_input = _param_component("dedup_input")
+                dedup_output = _param_component("dedup_output")
+            with gr.Accordion("去重参数", open=True):
+                dedup_params = _param_controls(
+                    [
+                        "dedup_scope",
+                        "episode_filter",
+                        "hash_threshold",
+                        "hash_size",
+                        "hash_crop",
+                        "hash_resize_width",
+                        "num_workers",
+                        "export_rejected",
+                    ],
+                    columns=4,
+                )
+                dedup_scope = dedup_params["dedup_scope"]
+                episode_filter = dedup_params["episode_filter"]
+                hash_threshold = dedup_params["hash_threshold"]
+                hash_size = dedup_params["hash_size"]
+                hash_crop = dedup_params["hash_crop"]
+                hash_resize_width = dedup_params["hash_resize_width"]
+                num_workers = dedup_params["num_workers"]
+                export_rejected = dedup_params["export_rejected"]
             with gr.Row():
                 analyze_btn = gr.Button("分析重复", variant="primary")
                 load_dedup_btn = gr.Button("加载 dedup_state")
@@ -129,47 +247,83 @@ def build_app() -> gr.Blocks:
 
         with gr.Tab("裁剪"):
             with gr.Row():
-                crop_input = gr.Textbox(label="输入图片文件夹")
-                crop_output = gr.Textbox(label="输出 crops 文件夹")
-            with gr.Row():
-                body_model_path = gr.Textbox(label="body YOLO 权重")
-                face_model_path = gr.Textbox(label="face YOLO 权重")
-            crop_mode = gr.CheckboxGroup(
-                ["full", "hard_split", "face", "body", "background", "random_crop"],
-                label="输出类型",
-                value=["full", "hard_split", "face", "body", "background", "random_crop"],
-            )
-            output_strategy = gr.Dropdown(["fixed", "random_weighted"], label="输出策略", value="fixed")
-            with gr.Row():
-                weight_full = gr.Number(label="full weight", value=0)
-                weight_hard = gr.Number(label="hard_split weight", value=0)
-                weight_face = gr.Number(label="face weight", value=30)
-                weight_body = gr.Number(label="body weight", value=30)
-                weight_background = gr.Number(label="background weight", value=20)
-                weight_random = gr.Number(label="random_crop weight", value=20)
-            with gr.Row():
-                face_aspect = gr.Dropdown(_aspect_options(), label="face aspect", value="square")
-                body_aspect = gr.Dropdown(_aspect_options(), label="body aspect", value="portrait_2_3")
-                background_aspect = gr.Dropdown(_aspect_options(), label="background aspect", value="landscape_16_9")
-                random_seed = gr.Number(label="random seed", value=42)
-            random_aspect_pool = gr.CheckboxGroup(["1:1", "2:3", "3:4", "9:16", "16:9", "4:3"], label="random crop aspect pool", value=["1:1", "2:3", "16:9"])
-            with gr.Row():
-                conf = gr.Number(label="conf", value=0.35)
-                imgsz = gr.Number(label="imgsz", value=960)
-                body_class_id = gr.Number(label="body class id", value=0)
-                face_class_id = gr.Number(label="face class id", value=0)
-                face_all_classes = gr.Checkbox(label="face all classes", value=True)
-            with gr.Row():
-                face_padding = gr.Number(label="face_padding", value=0.5)
-                body_padding_x = gr.Number(label="body_padding_x", value=0.18)
-                body_padding_y = gr.Number(label="body_padding_y", value=0.25)
-                background_exclusion_padding = gr.Number(label="background_exclusion_padding", value=0.15)
-                background_max_overlap = gr.Number(label="background_max_overlap", value=0.05)
-            with gr.Row():
-                min_crop_size = gr.Number(label="min_crop_size", value=128)
-                max_side = gr.Number(label="max_side", value=2048)
-                crop_png_compression = gr.Slider(label="png_compression", minimum=0, maximum=9, step=1, value=3)
-                target_crops_per_image = gr.Number(label="target_crops_per_image", value=3)
+                crop_input = _param_component("crop_input")
+                crop_output = _param_component("crop_output")
+            with gr.Accordion("输出类型与策略", open=True):
+                crop_mode = _param_component("crop_mode")
+                strategy_params = _param_controls(
+                    [
+                        "output_strategy",
+                        "weight_full",
+                        "weight_hard",
+                        "weight_face",
+                        "weight_body",
+                        "weight_background",
+                        "weight_random",
+                    ],
+                    columns=4,
+                )
+                output_strategy = strategy_params["output_strategy"]
+                weight_full = strategy_params["weight_full"]
+                weight_hard = strategy_params["weight_hard"]
+                weight_face = strategy_params["weight_face"]
+                weight_body = strategy_params["weight_body"]
+                weight_background = strategy_params["weight_background"]
+                weight_random = strategy_params["weight_random"]
+            with gr.Accordion("YOLO 检测参数", open=False):
+                yolo_params = _param_controls(
+                    [
+                        "body_model_path",
+                        "face_model_path",
+                        "conf",
+                        "imgsz",
+                        "body_class_id",
+                        "face_class_id",
+                        "face_all_classes",
+                    ],
+                    columns=3,
+                )
+                body_model_path = yolo_params["body_model_path"]
+                face_model_path = yolo_params["face_model_path"]
+                conf = yolo_params["conf"]
+                imgsz = yolo_params["imgsz"]
+                body_class_id = yolo_params["body_class_id"]
+                face_class_id = yolo_params["face_class_id"]
+                face_all_classes = yolo_params["face_all_classes"]
+            with gr.Accordion("比例与随机参数", open=False):
+                aspect_params = _param_controls(
+                    ["face_aspect", "body_aspect", "background_aspect", "random_seed"],
+                    columns=4,
+                )
+                face_aspect = aspect_params["face_aspect"]
+                body_aspect = aspect_params["body_aspect"]
+                background_aspect = aspect_params["background_aspect"]
+                random_seed = aspect_params["random_seed"]
+                random_aspect_pool = _param_component("random_aspect_pool")
+            with gr.Accordion("裁剪尺寸与边距", open=False):
+                crop_size_params = _param_controls(
+                    [
+                        "face_padding",
+                        "body_padding_x",
+                        "body_padding_y",
+                        "background_exclusion_padding",
+                        "background_max_overlap",
+                        "min_crop_size",
+                        "max_side",
+                        "crop_png_compression",
+                        "target_crops_per_image",
+                    ],
+                    columns=3,
+                )
+                face_padding = crop_size_params["face_padding"]
+                body_padding_x = crop_size_params["body_padding_x"]
+                body_padding_y = crop_size_params["body_padding_y"]
+                background_exclusion_padding = crop_size_params["background_exclusion_padding"]
+                background_max_overlap = crop_size_params["background_max_overlap"]
+                min_crop_size = crop_size_params["min_crop_size"]
+                max_side = crop_size_params["max_side"]
+                crop_png_compression = crop_size_params["crop_png_compression"]
+                target_crops_per_image = crop_size_params["target_crops_per_image"]
             crop_btn = gr.Button("开始裁剪", variant="primary")
             crop_log = gr.Textbox(label="日志窗口", lines=8)
 
@@ -664,4 +818,4 @@ def _deep_copy_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _aspect_options() -> list[str]:
-    return ["original", "square", "portrait_2_3", "portrait_3_4", "portrait_9_16", "landscape_16_9", "landscape_4_3", "random"]
+    return list(ASPECT_OPTIONS)
