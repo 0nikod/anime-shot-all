@@ -38,6 +38,7 @@ from .ignore_ranges import (
 from .files import relative_path_value
 from .stats import format_summary, recent_log_text, summarize_project
 from .video import VideoInfo, scan_videos, videos_as_dicts, videos_to_rows
+from .yolo_models import download_selected_presets, preset_choices
 
 
 IGNORE_HEADERS = ["episode_id", "video_name", "ignore_start", "ignore_end", "label", "enabled", "notes"]
@@ -75,8 +76,12 @@ PARAM_SCHEMA: dict[str, dict[str, Any]] = {
     "weight_body": {"component": "number", "label": "body weight", "value": 30, "info": "随机策略下身体权重。"},
     "weight_background": {"component": "number", "label": "background weight", "value": 20, "info": "随机策略下背景权重。"},
     "weight_random": {"component": "number", "label": "random_crop weight", "value": 20, "info": "随机策略下随机裁剪权重。"},
-    "body_model_path": {"component": "textbox", "label": "body YOLO 权重", "info": "body/background/avoid_body 需要。"},
-    "face_model_path": {"component": "textbox", "label": "face YOLO 权重", "info": "face 裁剪需要。"},
+    "body_model_preset": {"component": "dropdown", "label": "body YOLO 预设", "value": "bingsu/adetailer/person_yolov8n-seg.pt", "choices": preset_choices("body"), "info": "本地路径为空时使用该预设。"},
+    "face_model_preset": {"component": "dropdown", "label": "face YOLO 预设", "value": "bingsu/adetailer/face_yolov8n.pt", "choices": preset_choices("face"), "info": "本地路径为空时使用该预设。"},
+    "body_model_path": {"component": "textbox", "label": "body YOLO 本地路径", "info": "可选；填写后优先使用本地 .pt。"},
+    "face_model_path": {"component": "textbox", "label": "face YOLO 本地路径", "info": "可选；填写后优先使用本地 .pt。"},
+    "yolo_auto_download": {"component": "checkbox", "label": "自动下载预设权重", "value": True, "info": "缺少本地路径时下载到模型目录。"},
+    "yolo_model_dir": {"component": "textbox", "label": "YOLO 模型目录", "value": "models/yolo", "info": "相对路径会保存到 work_dir 下。"},
     "conf": {"component": "number", "label": "conf", "value": 0.35, "info": "检测置信度阈值。"},
     "imgsz": {"component": "number", "label": "imgsz", "value": 960, "info": "YOLO 推理输入尺寸。"},
     "body_class_id": {"component": "number", "label": "body class id", "value": 0, "info": "body/person 类别 ID。"},
@@ -273,8 +278,12 @@ def build_app() -> gr.Blocks:
             with gr.Accordion("YOLO 检测参数", open=False):
                 yolo_params = _param_controls(
                     [
+                        "body_model_preset",
+                        "face_model_preset",
                         "body_model_path",
                         "face_model_path",
+                        "yolo_auto_download",
+                        "yolo_model_dir",
                         "conf",
                         "imgsz",
                         "body_class_id",
@@ -283,13 +292,19 @@ def build_app() -> gr.Blocks:
                     ],
                     columns=3,
                 )
+                body_model_preset = yolo_params["body_model_preset"]
+                face_model_preset = yolo_params["face_model_preset"]
                 body_model_path = yolo_params["body_model_path"]
                 face_model_path = yolo_params["face_model_path"]
+                yolo_auto_download = yolo_params["yolo_auto_download"]
+                yolo_model_dir = yolo_params["yolo_model_dir"]
                 conf = yolo_params["conf"]
                 imgsz = yolo_params["imgsz"]
                 body_class_id = yolo_params["body_class_id"]
                 face_class_id = yolo_params["face_class_id"]
                 face_all_classes = yolo_params["face_all_classes"]
+                download_yolo_btn = gr.Button("下载所选 YOLO 权重")
+                yolo_download_log = gr.Textbox(label="YOLO 下载日志", lines=3)
             with gr.Accordion("比例与随机参数", open=False):
                 aspect_params = _param_controls(
                     ["face_aspect", "body_aspect", "background_aspect", "random_seed"],
@@ -359,6 +374,10 @@ def build_app() -> gr.Blocks:
             crop_output,
             body_model_path,
             face_model_path,
+            body_model_preset,
+            face_model_preset,
+            yolo_auto_download,
+            yolo_model_dir,
             crop_mode,
             output_strategy,
             weight_full,
@@ -422,6 +441,7 @@ def build_app() -> gr.Blocks:
         keep_all_btn.click(_keep_all, inputs=[work_dir, dedup_state, group_dropdown], outputs=[dedup_state, group_gallery, keep_choices, dedup_log])
         export_dedup_btn.click(_export_dedup, inputs=[work_dir, config_state, dedup_state, *param_inputs], outputs=[config_state, dedup_log])
         crop_btn.click(_run_crop_gui, inputs=[work_dir, config_state, *param_inputs], outputs=[config_state, crop_log])
+        download_yolo_btn.click(_download_yolo_models, inputs=[work_dir, config_state, *param_inputs], outputs=[config_state, yolo_download_log])
         refresh_stats_btn.click(_refresh_stats, inputs=[work_dir, config_state], outputs=[stats_output, paths_output, recent_logs])
 
     return app
@@ -595,6 +615,20 @@ def _run_crop_gui(work_dir: str, config: dict[str, Any], *values: Any):
     return updated, f"saved crops: {saved}\nlog: {log_path}"
 
 
+def _download_yolo_models(work_dir: str, config: dict[str, Any], *values: Any):
+    updated = _apply_gui_values(config, values)
+    root = Path(work_dir).expanduser().resolve()
+    downloaded = download_selected_presets(root, updated["yolo"])
+    if not downloaded:
+        return updated, "没有需要下载的预设权重。"
+    for kind, path in downloaded.items():
+        updated["yolo"][f"{kind}_model_path"] = relative_path_value(path, root)
+    path = save_params(root, updated)
+    lines = [f"{kind}: {model_path}" for kind, model_path in downloaded.items()]
+    lines.append(f"updated {path}")
+    return updated, "\n".join(lines)
+
+
 def _refresh_stats(work_dir: str, config: dict[str, Any]):
     root = Path(work_dir).expanduser().resolve()
     summary = summarize_project(root, config)
@@ -642,6 +676,10 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
         crop_output,
         body_model_path,
         face_model_path,
+        body_model_preset,
+        face_model_preset,
+        yolo_auto_download,
+        yolo_model_dir,
         crop_mode,
         output_strategy,
         weight_full,
@@ -725,8 +763,12 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
     )
     cfg["yolo"].update(
         {
-            "body_model_path": body_model_path,
-            "face_model_path": face_model_path,
+            "body_model_path": relative_path_value(body_model_path, root) if body_model_path else "",
+            "face_model_path": relative_path_value(face_model_path, root) if face_model_path else "",
+            "body_model_preset": body_model_preset,
+            "face_model_preset": face_model_preset,
+            "auto_download": bool(yolo_auto_download),
+            "model_dir": relative_path_value(yolo_model_dir, root),
             "conf": float(conf),
             "imgsz": int(imgsz),
             "body_class_id": int(body_class_id),
@@ -774,6 +816,10 @@ def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
         config["crop"]["output_dir"],
         config["yolo"]["body_model_path"],
         config["yolo"]["face_model_path"],
+        config["yolo"].get("body_model_preset", "bingsu/adetailer/person_yolov8n-seg.pt"),
+        config["yolo"].get("face_model_preset", "bingsu/adetailer/face_yolov8n.pt"),
+        config["yolo"].get("auto_download", True),
+        config["yolo"].get("model_dir", "models/yolo"),
         enabled_types,
         config["crop"]["output_strategy"],
         config["random_output_weights"]["full"],
