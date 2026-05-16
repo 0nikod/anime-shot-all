@@ -7,11 +7,12 @@ requires-python = ">=3.12"
 dependencies = [
     "gradio>=4.44",
     "imagehash>=4.3",
+    "dghs-imgutils>=0.19",
     "numpy>=1.26",
     "opencv-python>=4.10",
     "pillow>=10.4",
     "pyyaml>=6.0",
-    "ultralytics>=8.3",
+    "onnxruntime-gpu>=1.26.0",
 ]
 
 [project.scripts]

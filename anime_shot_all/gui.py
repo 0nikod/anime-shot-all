@@ -38,7 +38,6 @@ from .ignore_ranges import (
 from .files import relative_path_value
 from .stats import format_summary, recent_log_text, summarize_project
 from .video import VideoInfo, scan_videos, videos_as_dicts, videos_to_rows
-from .yolo_models import download_selected_presets, preset_choices
 
 
 IGNORE_HEADERS = ["episode_id", "video_name", "ignore_start", "ignore_end", "label", "enabled", "notes"]
@@ -68,33 +67,34 @@ PARAM_SCHEMA: dict[str, dict[str, Any]] = {
     "export_rejected": {"component": "checkbox", "label": "export_rejected_duplicates", "value": True, "info": "复制被去重图片便于复查。"},
     "crop_input": {"component": "textbox", "label": "输入图片文件夹", "info": "通常为 frames_dedup。"},
     "crop_output": {"component": "textbox", "label": "输出 crops 文件夹", "info": "最终 PNG 裁剪输出目录。"},
-    "crop_mode": {"component": "checkbox_group", "label": "输出类型", "choices": ["full", "hard_split", "face", "body", "background", "random_crop"], "value": ["full", "hard_split", "face", "body", "background", "random_crop"], "info": "未勾选的类型不会输出，也不会触发对应检测。"},
+    "crop_mode": {"component": "checkbox_group", "label": "输出类型", "choices": ["full", "hard_split", "face", "body", "halfbody", "background", "random_crop"], "value": ["full", "hard_split", "face", "body", "halfbody", "background", "random_crop"], "info": "未勾选的类型不会输出，也不会触发对应检测。"},
     "output_strategy": {"component": "dropdown", "label": "输出策略", "value": "fixed", "choices": ["fixed", "random_weighted"], "info": "fixed 全部尝试；random_weighted 按权重抽样。"},
     "weight_full": {"component": "number", "label": "full weight", "value": 0, "info": "随机策略下 full 权重。"},
     "weight_hard": {"component": "number", "label": "hard_split weight", "value": 0, "info": "随机策略下硬裁权重。"},
     "weight_face": {"component": "number", "label": "face weight", "value": 30, "info": "随机策略下脸部权重。"},
     "weight_body": {"component": "number", "label": "body weight", "value": 30, "info": "随机策略下身体权重。"},
+    "weight_halfbody": {"component": "number", "label": "halfbody weight", "value": 25, "info": "随机策略下上半身权重。"},
     "weight_background": {"component": "number", "label": "background weight", "value": 20, "info": "随机策略下背景权重。"},
     "weight_random": {"component": "number", "label": "random_crop weight", "value": 20, "info": "随机策略下随机裁剪权重。"},
-    "body_model_preset": {"component": "dropdown", "label": "body YOLO 预设", "value": "bingsu/adetailer/person_yolov8n-seg.pt", "choices": preset_choices("body"), "info": "本地路径为空时使用该预设。"},
-    "face_model_preset": {"component": "dropdown", "label": "face YOLO 预设", "value": "bingsu/adetailer/face_yolov8n.pt", "choices": preset_choices("face"), "info": "本地路径为空时使用该预设。"},
-    "body_model_path": {"component": "textbox", "label": "body YOLO 本地路径", "info": "可选；填写后优先使用本地 .pt。"},
-    "face_model_path": {"component": "textbox", "label": "face YOLO 本地路径", "info": "可选；填写后优先使用本地 .pt。"},
-    "yolo_auto_download": {"component": "checkbox", "label": "自动下载预设权重", "value": True, "info": "缺少本地路径时下载到模型目录。"},
-    "yolo_model_dir": {"component": "textbox", "label": "YOLO 模型目录", "value": "models/yolo", "info": "相对路径会保存到 work_dir 下。"},
-    "conf": {"component": "number", "label": "conf", "value": 0.35, "info": "检测置信度阈值。"},
-    "imgsz": {"component": "number", "label": "imgsz", "value": 960, "info": "YOLO 推理输入尺寸。"},
-    "body_class_id": {"component": "number", "label": "body class id", "value": 0, "info": "body/person 类别 ID。"},
-    "face_class_id": {"component": "number", "label": "face class id", "value": 0, "info": "face_all_classes 关闭时生效。"},
-    "face_all_classes": {"component": "checkbox", "label": "face all classes", "value": True, "info": "启用后 face 模型所有类别都接受。"},
+    "conf_threshold": {"component": "number", "label": "conf_threshold", "value": 0.35, "info": "imgutils 检测置信度阈值。"},
+    "iou_threshold": {"component": "number", "label": "iou_threshold", "value": 0.7, "info": "imgutils 检测 NMS IoU 阈值。"},
+    "face_level": {"component": "dropdown", "label": "face level", "value": "s", "choices": ["n", "s"], "info": "n 更快，s 更准。"},
+    "face_version": {"component": "dropdown", "label": "face version", "value": "v1.4", "choices": ["v0", "v1", "v1.3", "v1.4"], "info": "imgutils face 检测模型版本。"},
+    "person_level": {"component": "dropdown", "label": "person level", "value": "m", "choices": ["n", "s", "m", "x"], "info": "n 更快，x 更准。"},
+    "person_version": {"component": "dropdown", "label": "person version", "value": "v1.1", "choices": ["v0", "v1", "v1.1"], "info": "imgutils person 检测模型版本。"},
+    "halfbody_level": {"component": "dropdown", "label": "halfbody level", "value": "s", "choices": ["n", "s"], "info": "n 更快，s 更准。"},
+    "halfbody_version": {"component": "dropdown", "label": "halfbody version", "value": "v1.0", "choices": ["v1.0"], "info": "imgutils halfbody 检测模型版本。"},
     "face_aspect": {"component": "dropdown", "label": "face aspect", "value": "square", "choices": ASPECT_OPTIONS, "info": "face 输出比例。"},
     "body_aspect": {"component": "dropdown", "label": "body aspect", "value": "portrait_2_3", "choices": ASPECT_OPTIONS, "info": "body 输出比例。"},
+    "halfbody_aspect": {"component": "dropdown", "label": "halfbody aspect", "value": "portrait_3_4", "choices": ASPECT_OPTIONS, "info": "halfbody 输出比例。"},
     "background_aspect": {"component": "dropdown", "label": "background aspect", "value": "landscape_16_9", "choices": ASPECT_OPTIONS, "info": "background 输出比例。"},
     "random_seed": {"component": "number", "label": "random seed", "value": 42, "info": "控制随机裁剪和随机输出复现。"},
     "random_aspect_pool": {"component": "checkbox_group", "label": "random crop aspect pool", "choices": ["1:1", "2:3", "3:4", "9:16", "16:9", "4:3"], "value": ["1:1", "2:3", "16:9"], "info": "随机裁剪可选比例池。"},
     "face_padding": {"component": "number", "label": "face_padding", "value": 0.5, "info": "脸部框外扩比例，避免只裁五官。"},
     "body_padding_x": {"component": "number", "label": "body_padding_x", "value": 0.18, "info": "身体框水平外扩比例。"},
     "body_padding_y": {"component": "number", "label": "body_padding_y", "value": 0.25, "info": "身体框垂直外扩比例。"},
+    "halfbody_padding_x": {"component": "number", "label": "halfbody_padding_x", "value": 0.16, "info": "上半身框水平外扩比例。"},
+    "halfbody_padding_y": {"component": "number", "label": "halfbody_padding_y", "value": 0.20, "info": "上半身框垂直外扩比例。"},
     "background_exclusion_padding": {"component": "number", "label": "background_exclusion_padding", "value": 0.15, "info": "人物禁区外扩比例。"},
     "background_max_overlap": {"component": "number", "label": "background_max_overlap", "value": 0.05, "info": "背景 crop 允许重叠上限。"},
     "min_crop_size": {"component": "number", "label": "min_crop_size", "value": 128, "info": "小于该尺寸的 crop 跳过。"},
@@ -263,6 +263,7 @@ def build_app() -> gr.Blocks:
                         "weight_hard",
                         "weight_face",
                         "weight_body",
+                        "weight_halfbody",
                         "weight_background",
                         "weight_random",
                     ],
@@ -273,45 +274,39 @@ def build_app() -> gr.Blocks:
                 weight_hard = strategy_params["weight_hard"]
                 weight_face = strategy_params["weight_face"]
                 weight_body = strategy_params["weight_body"]
+                weight_halfbody = strategy_params["weight_halfbody"]
                 weight_background = strategy_params["weight_background"]
                 weight_random = strategy_params["weight_random"]
-            with gr.Accordion("YOLO 检测参数", open=False):
-                yolo_params = _param_controls(
+            with gr.Accordion("imgutils 检测参数", open=False):
+                detection_params = _param_controls(
                     [
-                        "body_model_preset",
-                        "face_model_preset",
-                        "body_model_path",
-                        "face_model_path",
-                        "yolo_auto_download",
-                        "yolo_model_dir",
-                        "conf",
-                        "imgsz",
-                        "body_class_id",
-                        "face_class_id",
-                        "face_all_classes",
+                        "conf_threshold",
+                        "iou_threshold",
+                        "face_level",
+                        "face_version",
+                        "person_level",
+                        "person_version",
+                        "halfbody_level",
+                        "halfbody_version",
                     ],
-                    columns=3,
+                    columns=4,
                 )
-                body_model_preset = yolo_params["body_model_preset"]
-                face_model_preset = yolo_params["face_model_preset"]
-                body_model_path = yolo_params["body_model_path"]
-                face_model_path = yolo_params["face_model_path"]
-                yolo_auto_download = yolo_params["yolo_auto_download"]
-                yolo_model_dir = yolo_params["yolo_model_dir"]
-                conf = yolo_params["conf"]
-                imgsz = yolo_params["imgsz"]
-                body_class_id = yolo_params["body_class_id"]
-                face_class_id = yolo_params["face_class_id"]
-                face_all_classes = yolo_params["face_all_classes"]
-                download_yolo_btn = gr.Button("下载所选 YOLO 权重")
-                yolo_download_log = gr.Textbox(label="YOLO 下载日志", lines=3)
+                conf_threshold = detection_params["conf_threshold"]
+                iou_threshold = detection_params["iou_threshold"]
+                face_level = detection_params["face_level"]
+                face_version = detection_params["face_version"]
+                person_level = detection_params["person_level"]
+                person_version = detection_params["person_version"]
+                halfbody_level = detection_params["halfbody_level"]
+                halfbody_version = detection_params["halfbody_version"]
             with gr.Accordion("比例与随机参数", open=False):
                 aspect_params = _param_controls(
-                    ["face_aspect", "body_aspect", "background_aspect", "random_seed"],
+                    ["face_aspect", "body_aspect", "halfbody_aspect", "background_aspect", "random_seed"],
                     columns=4,
                 )
                 face_aspect = aspect_params["face_aspect"]
                 body_aspect = aspect_params["body_aspect"]
+                halfbody_aspect = aspect_params["halfbody_aspect"]
                 background_aspect = aspect_params["background_aspect"]
                 random_seed = aspect_params["random_seed"]
                 random_aspect_pool = _param_component("random_aspect_pool")
@@ -321,6 +316,8 @@ def build_app() -> gr.Blocks:
                         "face_padding",
                         "body_padding_x",
                         "body_padding_y",
+                        "halfbody_padding_x",
+                        "halfbody_padding_y",
                         "background_exclusion_padding",
                         "background_max_overlap",
                         "min_crop_size",
@@ -333,6 +330,8 @@ def build_app() -> gr.Blocks:
                 face_padding = crop_size_params["face_padding"]
                 body_padding_x = crop_size_params["body_padding_x"]
                 body_padding_y = crop_size_params["body_padding_y"]
+                halfbody_padding_x = crop_size_params["halfbody_padding_x"]
+                halfbody_padding_y = crop_size_params["halfbody_padding_y"]
                 background_exclusion_padding = crop_size_params["background_exclusion_padding"]
                 background_max_overlap = crop_size_params["background_max_overlap"]
                 min_crop_size = crop_size_params["min_crop_size"]
@@ -372,33 +371,34 @@ def build_app() -> gr.Blocks:
             export_rejected,
             crop_input,
             crop_output,
-            body_model_path,
-            face_model_path,
-            body_model_preset,
-            face_model_preset,
-            yolo_auto_download,
-            yolo_model_dir,
             crop_mode,
             output_strategy,
             weight_full,
             weight_hard,
             weight_face,
             weight_body,
+            weight_halfbody,
             weight_background,
             weight_random,
             face_aspect,
             body_aspect,
+            halfbody_aspect,
             background_aspect,
             random_seed,
             random_aspect_pool,
-            conf,
-            imgsz,
-            body_class_id,
-            face_class_id,
-            face_all_classes,
+            conf_threshold,
+            iou_threshold,
+            face_level,
+            face_version,
+            person_level,
+            person_version,
+            halfbody_level,
+            halfbody_version,
             face_padding,
             body_padding_x,
             body_padding_y,
+            halfbody_padding_x,
+            halfbody_padding_y,
             background_exclusion_padding,
             background_max_overlap,
             min_crop_size,
@@ -441,7 +441,6 @@ def build_app() -> gr.Blocks:
         keep_all_btn.click(_keep_all, inputs=[work_dir, dedup_state, group_dropdown], outputs=[dedup_state, group_gallery, keep_choices, dedup_log])
         export_dedup_btn.click(_export_dedup, inputs=[work_dir, config_state, dedup_state, *param_inputs], outputs=[config_state, dedup_log])
         crop_btn.click(_run_crop_gui, inputs=[work_dir, config_state, *param_inputs], outputs=[config_state, crop_log])
-        download_yolo_btn.click(_download_yolo_models, inputs=[work_dir, config_state, *param_inputs], outputs=[config_state, yolo_download_log])
         refresh_stats_btn.click(_refresh_stats, inputs=[work_dir, config_state], outputs=[stats_output, paths_output, recent_logs])
 
     return app
@@ -615,20 +614,6 @@ def _run_crop_gui(work_dir: str, config: dict[str, Any], *values: Any):
     return updated, f"saved crops: {saved}\nlog: {log_path}"
 
 
-def _download_yolo_models(work_dir: str, config: dict[str, Any], *values: Any):
-    updated = _apply_gui_values(config, values)
-    root = Path(work_dir).expanduser().resolve()
-    downloaded = download_selected_presets(root, updated["yolo"])
-    if not downloaded:
-        return updated, "没有需要下载的预设权重。"
-    for kind, path in downloaded.items():
-        updated["yolo"][f"{kind}_model_path"] = relative_path_value(path, root)
-    path = save_params(root, updated)
-    lines = [f"{kind}: {model_path}" for kind, model_path in downloaded.items()]
-    lines.append(f"updated {path}")
-    return updated, "\n".join(lines)
-
-
 def _refresh_stats(work_dir: str, config: dict[str, Any]):
     root = Path(work_dir).expanduser().resolve()
     summary = summarize_project(root, config)
@@ -674,33 +659,34 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
         export_rejected,
         crop_input,
         crop_output,
-        body_model_path,
-        face_model_path,
-        body_model_preset,
-        face_model_preset,
-        yolo_auto_download,
-        yolo_model_dir,
         crop_mode,
         output_strategy,
         weight_full,
         weight_hard,
         weight_face,
         weight_body,
+        weight_halfbody,
         weight_background,
         weight_random,
         face_aspect,
         body_aspect,
+        halfbody_aspect,
         background_aspect,
         random_seed,
         random_aspect_pool,
-        conf,
-        imgsz,
-        body_class_id,
-        face_class_id,
-        face_all_classes,
+        conf_threshold,
+        iou_threshold,
+        face_level,
+        face_version,
+        person_level,
+        person_version,
+        halfbody_level,
+        halfbody_version,
         face_padding,
         body_padding_x,
         body_padding_y,
+        halfbody_padding_x,
+        halfbody_padding_y,
         background_exclusion_padding,
         background_max_overlap,
         min_crop_size,
@@ -750,30 +736,28 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
             "target_crops_per_image": int(target_crops_per_image),
         }
     )
-    cfg["crop_types"] = {key: key in (crop_mode or []) for key in ["full", "hard_split", "face", "body", "background", "random_crop"]}
+    cfg["crop_types"] = {key: key in (crop_mode or []) for key in ["full", "hard_split", "face", "body", "halfbody", "background", "random_crop"]}
     cfg["random_output_weights"].update(
         {
             "full": int(weight_full),
             "hard_split": int(weight_hard),
             "face": int(weight_face),
             "body": int(weight_body),
+            "halfbody": int(weight_halfbody),
             "background": int(weight_background),
             "random_crop": int(weight_random),
         }
     )
-    cfg["yolo"].update(
+    cfg.setdefault("detection", {}).update(
         {
-            "body_model_path": relative_path_value(body_model_path, root) if body_model_path else "",
-            "face_model_path": relative_path_value(face_model_path, root) if face_model_path else "",
-            "body_model_preset": body_model_preset,
-            "face_model_preset": face_model_preset,
-            "auto_download": bool(yolo_auto_download),
-            "model_dir": relative_path_value(yolo_model_dir, root),
-            "conf": float(conf),
-            "imgsz": int(imgsz),
-            "body_class_id": int(body_class_id),
-            "face_class_id": int(face_class_id),
-            "face_all_classes": bool(face_all_classes),
+            "conf_threshold": float(conf_threshold),
+            "iou_threshold": float(iou_threshold),
+            "face_level": face_level,
+            "face_version": face_version,
+            "person_level": person_level,
+            "person_version": person_version,
+            "halfbody_level": halfbody_level,
+            "halfbody_version": halfbody_version,
         }
     )
     cfg["face_crop"]["padding"] = float(face_padding)
@@ -781,6 +765,10 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
     cfg["body_crop"]["padding_x"] = float(body_padding_x)
     cfg["body_crop"]["padding_y"] = float(body_padding_y)
     cfg["body_crop"]["aspect_mode"] = body_aspect
+    cfg.setdefault("halfbody_crop", {})
+    cfg["halfbody_crop"]["padding_x"] = float(halfbody_padding_x)
+    cfg["halfbody_crop"]["padding_y"] = float(halfbody_padding_y)
+    cfg["halfbody_crop"]["aspect_mode"] = halfbody_aspect
     cfg["background_crop"]["exclusion_padding"] = float(background_exclusion_padding)
     cfg["background_crop"]["max_overlap"] = float(background_max_overlap)
     cfg["background_crop"]["aspect_mode"] = background_aspect
@@ -814,33 +802,34 @@ def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
         config["dedup"]["export_rejected_duplicates"],
         config["crop"]["input_dir"],
         config["crop"]["output_dir"],
-        config["yolo"]["body_model_path"],
-        config["yolo"]["face_model_path"],
-        config["yolo"].get("body_model_preset", "bingsu/adetailer/person_yolov8n-seg.pt"),
-        config["yolo"].get("face_model_preset", "bingsu/adetailer/face_yolov8n.pt"),
-        config["yolo"].get("auto_download", True),
-        config["yolo"].get("model_dir", "models/yolo"),
         enabled_types,
         config["crop"]["output_strategy"],
         config["random_output_weights"]["full"],
         config["random_output_weights"]["hard_split"],
         config["random_output_weights"]["face"],
         config["random_output_weights"]["body"],
+        config["random_output_weights"].get("halfbody", 25),
         config["random_output_weights"]["background"],
         config["random_output_weights"]["random_crop"],
         config["face_crop"]["aspect_mode"],
         config["body_crop"]["aspect_mode"],
+        config.get("halfbody_crop", {}).get("aspect_mode", "portrait_3_4"),
         config["background_crop"]["aspect_mode"],
         config["crop"]["random_seed"],
         config["random_crop"]["aspect_pool"],
-        config["yolo"]["conf"],
-        config["yolo"]["imgsz"],
-        config["yolo"]["body_class_id"],
-        config["yolo"].get("face_class_id") or 0,
-        config["yolo"]["face_all_classes"],
+        config.get("detection", {}).get("conf_threshold", 0.35),
+        config.get("detection", {}).get("iou_threshold", 0.7),
+        config.get("detection", {}).get("face_level", "s"),
+        config.get("detection", {}).get("face_version", "v1.4"),
+        config.get("detection", {}).get("person_level", "m"),
+        config.get("detection", {}).get("person_version", "v1.1"),
+        config.get("detection", {}).get("halfbody_level", "s"),
+        config.get("detection", {}).get("halfbody_version", "v1.0"),
         config["face_crop"]["padding"],
         config["body_crop"]["padding_x"],
         config["body_crop"]["padding_y"],
+        config.get("halfbody_crop", {}).get("padding_x", 0.16),
+        config.get("halfbody_crop", {}).get("padding_y", 0.20),
         config["background_crop"]["exclusion_padding"],
         config["background_crop"]["max_overlap"],
         config["crop"]["min_crop_size"],
