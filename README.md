@@ -44,8 +44,6 @@ work_dir/
   frames_dedup/
   rejected_duplicates/
   crops/
-  models/
-    yolo/
   configs/
     default.yaml
     params.yaml
@@ -66,13 +64,11 @@ video_dir/
 - `ignore_ranges` 只用于截帧阶段跳过时间段，不参与去重或裁剪分组。
 - 不实现 OP / ED 自动识别、单独目录、单独去重或单独裁剪。
 - 去重采用 pHash，算法只生成建议，最终结果以人工确认后的 `dedup_state.json` 为准。
-- YOLO 裁剪兼容 Ultralytics `.pt` 权重。GUI 内置 `Bingsu/adetailer` 的 face/person 预设，可自动下载到 `work_dir/models/yolo/`；也可以填写本机 `.pt` 路径覆盖预设。
+- 语义裁剪使用 `dghs-imgutils` 的 face / person / halfbody 检测，不再由本工具直接管理检测模型权重。
 - 所有阶段都采用复制或生成新文件，不删除源视频或源图片。
 
 ## 验证
 
 ```bash
 uv run pytest
-uv run python -m compileall anime_shot_all tests
-uv run python -c 'from anime_shot_all.gui import build_app; print(type(build_app()).__name__)'
 ```

@@ -48,6 +48,7 @@ def test_hard_and_random_crop_outputs_are_png(tmp_path: Path):
         "hard_split": True,
         "face": False,
         "body": False,
+        "halfbody": False,
         "background": False,
         "random_crop": True,
     }
@@ -80,13 +81,10 @@ def test_crop_skips_detection_when_semantic_types_are_disabled(tmp_path: Path):
         "hard_split": False,
         "face": False,
         "body": False,
+        "halfbody": False,
         "background": False,
         "random_crop": False,
     }
-
-    class FailingModel:
-        def predict(self, *args, **kwargs):
-            raise AssertionError("detection should not run")
 
     saved, rows = crop_one_image(
         tmp_path,
@@ -94,9 +92,49 @@ def test_crop_skips_detection_when_semantic_types_are_disabled(tmp_path: Path):
         image_path,
         tmp_path / "crops",
         random.Random(42),
-        body_model=FailingModel(),
-        face_model=FailingModel(),
     )
 
     assert saved == 1
     assert rows[0]["crop_type"] == "full"
+
+
+def test_imgutils_detection_outputs_body_face_and_halfbody(tmp_path: Path, monkeypatch):
+    config, _ = initialize_work_dir(tmp_path)
+    image_path = tmp_path / "frames_dedup" / "ep01_f0000000001_t000001.000.png"
+    _save_image(image_path, (40, 50, 60))
+    config["crop_types"] = {
+        "full": False,
+        "hard_split": False,
+        "face": True,
+        "body": True,
+        "halfbody": True,
+        "background": False,
+        "random_crop": False,
+    }
+    config["crop"]["min_crop_size"] = 16
+    config["body_crop"]["min_size"] = 16
+    config["face_crop"]["min_size"] = 16
+    config["halfbody_crop"]["min_size"] = 16
+
+    calls = []
+
+    def fake_detector(image, kind, level, version, conf_threshold, iou_threshold):
+        calls.append(kind)
+        if kind == "person":
+            return [((20, 10, 220, 170), "person", 0.9)]
+        if kind == "face":
+            return [((50, 20, 110, 80), "face", 0.8)]
+        if kind == "halfbody":
+            return [((10, 5, 150, 120), "halfbody", 0.85)]
+        return []
+
+    monkeypatch.setattr("anime_shot_all.crop._call_imgutils_detector", fake_detector)
+
+    saved, rows = crop_one_image(tmp_path, config, image_path, tmp_path / "crops", random.Random(42))
+
+    assert saved == 3
+    assert {"person", "face", "halfbody"}.issubset(set(calls))
+    assert (tmp_path / "crops" / "body").exists()
+    assert (tmp_path / "crops" / "face").exists()
+    assert (tmp_path / "crops" / "halfbody").exists()
+    assert {row["crop_type"] for row in rows if row["status"] == "saved"} == {"body", "face", "halfbody"}

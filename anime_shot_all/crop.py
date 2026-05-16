@@ -1,4 +1,4 @@
-"""Image crop generation, including hard splits, random crops, and YOLO crops."""
+"""Image crop generation, including hard splits, random crops, and imgutils crops."""
 
 from __future__ import annotations
 
@@ -12,9 +12,6 @@ from PIL import Image
 from .config import resolve_work_path
 from .files import collect_images, parse_episode_id, relative_to_or_absolute
 from .logging_utils import write_csv
-from .yolo_models import resolve_yolo_model_path
-
-
 CROP_LOG_FIELDS = [
     "source_image",
     "output_image",
@@ -61,7 +58,7 @@ ASPECTS = {
 class Detection:
     box: tuple[float, float, float, float]
     score: float
-    class_id: int
+    label: str
 
 
 @dataclass
@@ -85,17 +82,10 @@ def run_crop(work_dir: Path, config: dict[str, Any], input_dir: Path | None = No
     output_dir.mkdir(parents=True, exist_ok=True)
     rng = random.Random(int(params.get("random_seed", 42)))
 
-    body_model_path = resolve_yolo_model_path(work_dir, config["yolo"], "body") if _needs_body_detection(config) else None
-    face_model_path = resolve_yolo_model_path(work_dir, config["yolo"], "face") if _needs_face_detection(config) else None
-    config["yolo"]["body_model_path"] = str(body_model_path or config["yolo"].get("body_model_path", ""))
-    config["yolo"]["face_model_path"] = str(face_model_path or config["yolo"].get("face_model_path", ""))
-    body_model = _load_model(body_model_path) if body_model_path else None
-    face_model = _load_model(face_model_path) if face_model_path else None
-
     rows: list[dict[str, object]] = []
     saved = 0
     for image_path in collect_images(input_dir):
-        image_saved, image_rows = crop_one_image(work_dir, config, image_path, output_dir, rng, body_model, face_model)
+        image_saved, image_rows = crop_one_image(work_dir, config, image_path, output_dir, rng)
         saved += image_saved
         rows.extend(image_rows)
     log_path = resolve_work_path(work_dir, config["logging"]["crop_log"])
@@ -109,17 +99,16 @@ def crop_one_image(
     image_path: Path,
     output_dir: Path,
     rng: random.Random,
-    body_model: Any = None,
-    face_model: Any = None,
 ) -> tuple[int, list[dict[str, object]]]:
     rows: list[dict[str, object]] = []
     params = config["crop"]
     with Image.open(image_path) as opened:
         image = opened.convert("RGB")
     width, height = image.size
-    body_detections = _detect(body_model, image_path, config, "body") if _needs_body_detection(config) else []
-    face_detections = _detect(face_model, image_path, config, "face") if _needs_face_detection(config) else []
-    candidates = _build_candidates(image, config, rng, body_detections, face_detections)
+    body_detections = _detect(image_path, config, "body") if _needs_body_detection(config) else []
+    face_detections = _detect(image_path, config, "face") if _needs_face_detection(config) else []
+    halfbody_detections = _detect_halfbody(image, image_path, config, body_detections) if _needs_halfbody_detection(config) else []
+    candidates = _build_candidates(image, config, rng, body_detections, face_detections, halfbody_detections)
     selected = _select_candidates(candidates, config, rng)
     saved = 0
     for index, candidate in enumerate(selected, start=1):
@@ -155,6 +144,7 @@ def _build_candidates(
     rng: random.Random,
     body_detections: list[Detection],
     face_detections: list[Detection],
+    halfbody_detections: list[Detection],
 ) -> list[CropCandidate]:
     enabled = config["crop_types"]
     width, height = image.size
@@ -167,6 +157,8 @@ def _build_candidates(
         candidates.extend(_detection_candidates("body", body_detections, width, height, config))
     if enabled.get("face", True):
         candidates.extend(_detection_candidates("face", face_detections, width, height, config))
+    if enabled.get("halfbody", True):
+        candidates.extend(_detection_candidates("halfbody", halfbody_detections, width, height, config))
     if enabled.get("background", True):
         candidates.extend(_background_candidates(width, height, body_detections, config))
     if enabled.get("random_crop", True):
@@ -194,21 +186,20 @@ def _hard_split_candidates(width: int, height: int, enabled: dict[str, bool]) ->
 
 
 def _detection_candidates(kind: str, detections: list[Detection], width: int, height: int, config: dict[str, Any]) -> list[CropCandidate]:
-    if kind == "body":
-        params = config["body_crop"]
-        padding_x = float(params["padding_x"])
-        padding_y = float(params["padding_y"])
-        aspect_mode = params["aspect_mode"]
-        max_count = int(params["max_count_per_image"])
-        min_size = int(params["min_size"])
-        model_path = config["yolo"].get("body_model_path", "")
-    else:
+    if kind == "face":
         params = config["face_crop"]
         padding_x = padding_y = float(params["padding"])
         aspect_mode = params["aspect_mode"]
         max_count = int(params["max_count_per_image"])
         min_size = int(params["min_size"])
-        model_path = config["yolo"].get("face_model_path", "")
+    else:
+        params = config[f"{kind}_crop"]
+        padding_x = float(params["padding_x"])
+        padding_y = float(params["padding_y"])
+        aspect_mode = params["aspect_mode"]
+        max_count = int(params["max_count_per_image"])
+        min_size = int(params["min_size"])
+    model_path = f"imgutils:{kind}"
     candidates = []
     for detection in sorted(detections, key=lambda item: item.score, reverse=True)[:max_count]:
         box = _pad_box(detection.box, padding_x, padding_y)
@@ -222,8 +213,8 @@ def _detection_candidates(kind: str, detections: list[Detection], width: int, he
                 aspect_mode,
                 "detected",
                 model_path=model_path,
-                conf=config["yolo"].get("conf", ""),
-                class_id=detection.class_id,
+                conf=config["detection"].get("conf_threshold", ""),
+                class_id=detection.label,
                 score=round(detection.score, 4),
                 padding_x=padding_x,
                 padding_y=padding_y,
@@ -307,39 +298,70 @@ def _select_candidates(candidates: list[CropCandidate], config: dict[str, Any], 
     return selected
 
 
-def _detect(model: Any, image_path: Path, config: dict[str, Any], kind: str) -> list[Detection]:
-    if model is None:
-        return []
-    yolo = config["yolo"]
-    results = model.predict(str(image_path), conf=float(yolo["conf"]), imgsz=int(yolo["imgsz"]), verbose=False)
+def _detect(image_path: Path, config: dict[str, Any], kind: str) -> list[Detection]:
+    if kind == "body":
+        return _imgutils_detect(image_path, config, "person")
+    return _imgutils_detect(image_path, config, kind)
+
+
+def _detect_halfbody(image: Image.Image, image_path: Path, config: dict[str, Any], body_detections: list[Detection]) -> list[Detection]:
+    # imgutils notes that halfbody detection is most reliable on single-person
+    # crops, so when person boxes are available we run halfbody per person box
+    # and translate the result back into full-image coordinates.
+    if not body_detections:
+        return _imgutils_detect(image_path, config, "halfbody")
+
+    width, height = image.size
     detections: list[Detection] = []
-    for result in results:
-        boxes = getattr(result, "boxes", None)
-        if boxes is None:
+    for person in body_detections:
+        x1, y1, x2, y2 = _clamp_box(_round_box(person.box), width, height)
+        if x2 <= x1 or y2 <= y1:
             continue
-        for box in boxes:
-            class_id = int(box.cls.item())
-            if kind == "body" and class_id != int(yolo["body_class_id"]):
-                continue
-            if kind == "face" and not yolo.get("face_all_classes", True) and class_id != int(yolo.get("face_class_id", 0)):
-                continue
-            coords = tuple(float(value) for value in box.xyxy[0].tolist())
-            detections.append(Detection(coords, float(box.conf.item()), class_id))
+        crop = image.crop((x1, y1, x2, y2))
+        for detection in _imgutils_detect(crop, config, "halfbody"):
+            hx1, hy1, hx2, hy2 = detection.box
+            detections.append(Detection((hx1 + x1, hy1 + y1, hx2 + x1, hy2 + y1), detection.score, detection.label))
     return detections
 
 
-def _load_model(model_path: str | Path) -> Any:
-    if not model_path:
-        return None
-    from ultralytics import YOLO
+def _imgutils_detect(image: Any, config: dict[str, Any], kind: str) -> list[Detection]:
+    params = config["detection"]
+    level = str(params[f"{kind}_level"])
+    version = str(params[f"{kind}_version"])
+    conf_threshold = float(params.get("conf_threshold", 0.35))
+    iou_threshold = float(params.get("iou_threshold", 0.7))
+    raw_results = _call_imgutils_detector(image, kind, level, version, conf_threshold, iou_threshold)
+    return [Detection(tuple(float(value) for value in box), float(score), label) for box, label, score in raw_results]
 
-    return YOLO(str(model_path))
+
+def _call_imgutils_detector(
+    image: Any,
+    kind: str,
+    level: str,
+    version: str,
+    conf_threshold: float,
+    iou_threshold: float,
+) -> list[tuple[tuple[int, int, int, int], str, float]]:
+    if kind == "face":
+        from imgutils.detect import detect_faces
+
+        return detect_faces(image, level=level, version=version, conf_threshold=conf_threshold, iou_threshold=iou_threshold)
+    if kind == "person":
+        from imgutils.detect import detect_person
+
+        return detect_person(image, level=level, version=version, conf_threshold=conf_threshold, iou_threshold=iou_threshold)
+    if kind == "halfbody":
+        from imgutils.detect import detect_halfbody
+
+        return detect_halfbody(image, level=level, version=version, conf_threshold=conf_threshold, iou_threshold=iou_threshold)
+    raise ValueError(f"unsupported detection kind: {kind}")
 
 
 def _needs_body_detection(config: dict[str, Any]) -> bool:
     enabled = config.get("crop_types", {})
     return bool(
         enabled.get("body", True)
+        or enabled.get("halfbody", True)
         or enabled.get("background", True)
         or (enabled.get("random_crop", True) and config.get("random_crop", {}).get("avoid_body", False))
     )
@@ -347,6 +369,10 @@ def _needs_body_detection(config: dict[str, Any]) -> bool:
 
 def _needs_face_detection(config: dict[str, Any]) -> bool:
     return bool(config.get("crop_types", {}).get("face", True))
+
+
+def _needs_halfbody_detection(config: dict[str, Any]) -> bool:
+    return bool(config.get("crop_types", {}).get("halfbody", True))
 
 
 def _target_dir(output_dir: Path, crop_type: str) -> Path:
