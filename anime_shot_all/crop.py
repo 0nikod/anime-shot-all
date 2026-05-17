@@ -12,6 +12,8 @@ from PIL import Image
 from .config import resolve_work_path
 from .files import collect_images, parse_episode_id, relative_to_or_absolute
 from .logging_utils import write_csv
+from .progress import ProgressCallback, format_progress
+
 CROP_LOG_FIELDS = [
     "source_image",
     "output_image",
@@ -81,6 +83,7 @@ def run_crop(
     input_dir: Path | None = None,
     output_dir: Path | None = None,
     stop_state: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> tuple[int, Path]:
     params = config["crop"]
     input_dir = input_dir or resolve_work_path(work_dir, params.get("input_dir", "frames_dedup"))
@@ -90,12 +93,20 @@ def run_crop(
 
     rows: list[dict[str, object]] = []
     saved = 0
-    for image_path in collect_images(input_dir):
+    images = collect_images(input_dir)
+    total = len(images)
+    for index, image_path in enumerate(images, start=1):
         if stop_state and stop_state.get("stop"):
+            if progress:
+                progress("stopped by user")
             break
+        if progress:
+            progress(format_progress("crop", index, total, image_path))
         image_saved, image_rows = crop_one_image(work_dir, config, image_path, output_dir, rng)
         saved += image_saved
         rows.extend(image_rows)
+        if progress:
+            progress(f"{image_path.name}: saved {image_saved} crops, total {saved}")
     log_path = resolve_work_path(work_dir, config["logging"]["crop_log"])
     write_csv(log_path, CROP_LOG_FIELDS, rows)
     return saved, log_path

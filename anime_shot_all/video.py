@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .files import natural_key, relative_to_or_absolute
+from .progress import ProgressCallback, format_progress, process_error_message
 
 
 @dataclass(frozen=True)
@@ -44,8 +45,13 @@ def probe_video(path: Path, episode_id: str, work_dir: Path) -> VideoInfo:
         "json",
         str(path),
     ]
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
-    payload = json.loads(result.stdout)
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        payload = json.loads(result.stdout)
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(process_error_message(f"ffprobe failed for {path}", error)) from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"ffprobe returned invalid JSON for {path}: {error}") from error
     stream = (payload.get("streams") or [{}])[0]
     duration = float((payload.get("format") or {}).get("duration") or 0)
     return VideoInfo(
@@ -59,15 +65,25 @@ def probe_video(path: Path, episode_id: str, work_dir: Path) -> VideoInfo:
     )
 
 
-def scan_videos(video_dir: Path, work_dir: Path, supported_ext: list[str]) -> list[VideoInfo]:
+def video_candidates(video_dir: Path, supported_ext: list[str]) -> list[Path]:
     extensions = {ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in supported_ext}
-    candidates = sorted(
+    return sorted(
         [p for p in video_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions],
         key=natural_key,
     )
+
+
+def scan_videos(video_dir: Path, work_dir: Path, supported_ext: list[str], progress: ProgressCallback | None = None) -> list[VideoInfo]:
+    candidates = video_candidates(video_dir, supported_ext)
     videos: list[VideoInfo] = []
     for index, path in enumerate(candidates, start=1):
-        videos.append(probe_video(path, f"ep{index:02d}", work_dir))
+        if progress:
+            progress(format_progress("scan", index, len(candidates), path))
+        try:
+            videos.append(probe_video(path, f"ep{len(videos) + 1:02d}", work_dir))
+        except RuntimeError as error:
+            if progress:
+                progress(str(error))
     return videos
 
 

@@ -12,7 +12,7 @@ def test_gui_builds_blocks():
 def test_scan_videos_reports_missing_directory(tmp_path):
     missing = tmp_path / "missing"
 
-    videos, rows, message, _ = _scan_videos(str(tmp_path), str(missing), {})
+    videos, rows, message, _ = list(_scan_videos(str(tmp_path), str(missing), {}))[-1]
 
     assert videos == []
     assert rows == []
@@ -25,18 +25,17 @@ def test_scan_videos_uses_defaults_when_config_is_empty(tmp_path, monkeypatch):
     video_dir.mkdir()
     captured = {}
 
-    def fake_scan_videos(path, work_dir, supported_ext):
+    def fake_video_candidates(path, supported_ext):
         captured["path"] = path
-        captured["work_dir"] = work_dir
         captured["supported_ext"] = supported_ext
         return []
 
-    monkeypatch.setattr("anime_shot_all.gui.scan_videos", fake_scan_videos)
+    monkeypatch.setattr("anime_shot_all.gui.video_candidates", fake_video_candidates)
 
-    videos, rows, message, _ = _scan_videos(str(tmp_path), str(video_dir), {})
+    videos, rows, message, _ = list(_scan_videos(str(tmp_path), str(video_dir), {}))[-1]
 
     assert videos == []
     assert rows == []
-    assert message == "scanned 0 videos"
+    assert "scanned 0 videos" in message
     assert captured["path"] == video_dir
     assert ".mkv" in captured["supported_ext"]

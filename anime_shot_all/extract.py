@@ -19,6 +19,7 @@ from .config import resolve_work_path
 from .files import relative_to_or_absolute
 from .ignore_ranges import active_ranges_for_episode, load_ignore_state, match_ignore
 from .logging_utils import write_csv
+from .progress import ProgressCallback, format_progress, process_error_message
 from .timecode import timestamp_token
 from .video import VideoInfo
 
@@ -47,6 +48,7 @@ def extract_frames_for_videos(
     videos: list[VideoInfo],
     output_dir: Path | None = None,
     stop_state: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> tuple[int, Path, list[str]]:
     """Extract frames for all videos and write one combined CSV log."""
 
@@ -57,7 +59,10 @@ def extract_frames_for_videos(
     rows: list[dict[str, object]] = []
     messages: list[str] = []
     saved_total = 0
-    for video in videos:
+    total = len(videos)
+    for index, video in enumerate(videos, start=1):
+        if progress:
+            progress(format_progress("extract", index, total, video.video_name))
         saved, video_rows = extract_frames_for_video(
             work_dir,
             config,
@@ -65,12 +70,18 @@ def extract_frames_for_videos(
             ignore_state,
             output_dir,
             stop_state=stop_state,
+            progress=progress,
         )
         saved_total += saved
         rows.extend(video_rows)
-        messages.append(f"{video.episode_id}: saved {saved} frames")
+        message = f"{video.episode_id}: saved {saved} frames from {video.video_name}"
+        messages.append(message)
+        if progress:
+            progress(message)
         if stop_state and stop_state.get("stop"):
             messages.append("stopped by user")
+            if progress:
+                progress("stopped by user")
             break
     write_csv(log_path, EXTRACT_LOG_FIELDS, rows)
     return saved_total, log_path, messages
@@ -83,6 +94,7 @@ def extract_frames_for_video(
     ignore_state: dict[str, Any],
     output_dir: Path,
     stop_state: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> tuple[int, list[dict[str, object]]]:
     params = config["extract"]
     video_path = resolve_work_path(work_dir, video.video_path)
@@ -107,7 +119,9 @@ def extract_frames_for_video(
 
     if keyframe_only:
         # keyframe mode: interval/max_gap/pHash dedup are ignored.
-        keyframes = _probe_keyframe_timestamps(video_path)
+        keyframes = _probe_keyframe_timestamps(video_path, progress=progress)
+        if progress:
+            progress(f"{video.video_name}: found {len(keyframes)} keyframes")
         if not keyframes:
             rows.append(_error_row(video, f"no keyframes found: {video_path}"))
         for frame_index, timestamp in keyframes:
@@ -354,7 +368,7 @@ def _crop_for_hash(image: Image.Image, mode: str) -> Image.Image:
     return image.crop((left, top, left + crop_width, top + crop_height))
 
 
-def _probe_keyframe_timestamps(video_path: Path) -> list[tuple[int, float]]:
+def _probe_keyframe_timestamps(video_path: Path, progress: ProgressCallback | None = None) -> list[tuple[int, float]]:
     command = [
         "ffprobe",
         "-v",
@@ -371,7 +385,13 @@ def _probe_keyframe_timestamps(video_path: Path) -> list[tuple[int, float]]:
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         payload = json.loads(result.stdout)
-    except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+    except subprocess.CalledProcessError as error:
+        if progress:
+            progress(process_error_message(f"ffprobe failed for {video_path}", error))
+        return []
+    except (FileNotFoundError, json.JSONDecodeError) as error:
+        if progress:
+            progress(f"ffprobe failed for {video_path}: {error}")
         return []
     timestamps: list[tuple[int, float]] = []
     index = 0

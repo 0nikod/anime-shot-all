@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,9 @@ from .config import (
     save_params,
     write_yaml,
 )
-from .crop import run_crop
+from .crop import CROP_LOG_FIELDS, crop_one_image
 from .defaults import builtin_defaults
-from .extract import extract_frames_for_videos
+from .extract import EXTRACT_LOG_FIELDS, extract_frames_for_video
 from .ignore_ranges import (
     export_csv,
     import_csv,
@@ -28,9 +29,11 @@ from .ignore_ranges import (
     state_to_rows,
     rows_to_state,
 )
-from .files import relative_path_value
+from .files import collect_images, relative_path_value
+from .logging_utils import write_csv
+from .progress import format_progress
 from .stats import format_summary, recent_log_text, summarize_project
-from .video import VideoInfo, scan_videos, videos_as_dicts, videos_to_rows
+from .video import VideoInfo, probe_video, video_candidates, videos_as_dicts, videos_to_rows
 
 
 IGNORE_HEADERS = ["episode_id", "video_name", "ignore_start", "ignore_end", "label", "enabled", "notes"]
@@ -450,12 +453,28 @@ def _scan_videos(work_dir: str, video_dir: str, config: dict[str, Any]):
     config = _config_for_scan(root, config)
     video_path = resolve_work_path(root, video_dir)
     if not video_path.exists():
-        return _empty_video_scan(f"视频文件夹不存在: {video_path}")
+        yield _empty_video_scan(f"视频文件夹不存在: {video_path}")
+        return
     if not video_path.is_dir():
-        return _empty_video_scan(f"视频路径不是文件夹: {video_path}")
-    videos = scan_videos(video_path, root, config["project"]["supported_video_ext"])
+        yield _empty_video_scan(f"视频路径不是文件夹: {video_path}")
+        return
+    candidates = video_candidates(video_path, config["project"]["supported_video_ext"])
+    logs = [f"scan videos: {video_path}", f"matched files: {len(candidates)}"]
+    videos: list[VideoInfo] = []
+    yield [], [], "\n".join(logs), gr.update(choices=[], value=[])
+    for index, path in enumerate(candidates, start=1):
+        logs.append(format_progress("scan", index, len(candidates), path))
+        yield videos_as_dicts(videos), videos_to_rows(videos), "\n".join(logs), gr.update(choices=[item.video_name for item in videos], value=[item.video_name for item in videos])
+        try:
+            video = probe_video(path, f"ep{len(videos) + 1:02d}", root)
+        except RuntimeError as error:
+            logs.append(str(error))
+            continue
+        videos.append(video)
+        logs.append(f"{video.episode_id}: {video.video_name}")
     choices = [item.video_name for item in videos]
-    return videos_as_dicts(videos), videos_to_rows(videos), f"scanned {len(videos)} videos", gr.update(choices=choices, value=choices)
+    logs.append(f"scanned {len(videos)} videos")
+    yield videos_as_dicts(videos), videos_to_rows(videos), "\n".join(logs), gr.update(choices=choices, value=choices)
 
 
 def _config_for_scan(root: Path, config: dict[str, Any] | None) -> dict[str, Any]:
@@ -519,8 +538,39 @@ def _run_extract(
     root = Path(work_dir).expanduser().resolve()
     selected_set = set(selected or [])
     video_objs = [VideoInfo(**item) for item in videos if not selected_set or item.get("video_name") in selected_set]
-    saved, log_path, messages = extract_frames_for_videos(root, updated, video_objs, stop_state=stop_state)
-    return updated, "\n".join([*messages, f"saved total: {saved}", f"log: {log_path}"]), stop_state
+    output_dir = resolve_work_path(root, updated["paths"]["frames_raw"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log_path = resolve_work_path(root, updated["logging"]["extract_log"])
+    ignore_state = load_ignore_state(root)
+    rows: list[dict[str, object]] = []
+    logs = [f"extract videos: {len(video_objs)}", f"output: {output_dir}"]
+    saved_total = 0
+    yield updated, "\n".join(logs), stop_state
+    for index, video in enumerate(video_objs, start=1):
+        if stop_state and stop_state.get("stop"):
+            logs.append("stopped by user")
+            break
+        logs.append(format_progress("extract", index, len(video_objs), video.video_name))
+        yield updated, "\n".join(logs), stop_state
+        progress_messages: list[str] = []
+        saved, video_rows = extract_frames_for_video(
+            root,
+            updated,
+            video,
+            ignore_state,
+            output_dir,
+            stop_state=stop_state,
+            progress=progress_messages.append,
+        )
+        rows.extend(video_rows)
+        saved_total += saved
+        logs.extend(progress_messages)
+        logs.append(f"{video.episode_id}: saved {saved} frames from {video.video_name}")
+        yield updated, "\n".join(logs), stop_state
+    write_csv(log_path, EXTRACT_LOG_FIELDS, rows)
+    logs.append(f"saved total: {saved_total}")
+    logs.append(f"log: {log_path}")
+    yield updated, "\n".join(logs), stop_state
 
 
 
@@ -529,8 +579,33 @@ def _run_crop_gui(work_dir: str, config: dict[str, Any], stop_state: dict[str, A
     updated = _apply_gui_values(config, values)
     stop_state = dict(stop_state or {})
     stop_state["stop"] = False
-    saved, log_path = run_crop(Path(work_dir).expanduser().resolve(), updated, stop_state=stop_state)
-    return updated, f"saved crops: {saved}\nlog: {log_path}", stop_state
+    root = Path(work_dir).expanduser().resolve()
+    params = updated["crop"]
+    input_dir = resolve_work_path(root, params.get("input_dir", "frames_dedup"))
+    output_dir = resolve_work_path(root, params.get("output_dir", "crops"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    images = collect_images(input_dir)
+    rng = random.Random(int(params.get("random_seed", 42)))
+    rows: list[dict[str, object]] = []
+    saved_total = 0
+    log_path = resolve_work_path(root, updated["logging"]["crop_log"])
+    logs = [f"crop images: {len(images)}", f"input: {input_dir}", f"output: {output_dir}"]
+    yield updated, "\n".join(logs), stop_state
+    for index, image_path in enumerate(images, start=1):
+        if stop_state and stop_state.get("stop"):
+            logs.append("stopped by user")
+            break
+        logs.append(format_progress("crop", index, len(images), image_path))
+        yield updated, "\n".join(logs), stop_state
+        image_saved, image_rows = crop_one_image(root, updated, image_path, output_dir, rng)
+        saved_total += image_saved
+        rows.extend(image_rows)
+        logs.append(f"{image_path.name}: saved {image_saved} crops, total {saved_total}")
+        yield updated, "\n".join(logs), stop_state
+    write_csv(log_path, CROP_LOG_FIELDS, rows)
+    logs.append(f"saved crops: {saved_total}")
+    logs.append(f"log: {log_path}")
+    yield updated, "\n".join(logs), stop_state
 
 
 def _request_stop(stop_state: dict[str, Any]):

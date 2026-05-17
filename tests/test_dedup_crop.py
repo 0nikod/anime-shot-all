@@ -72,6 +72,30 @@ def test_hard_and_random_crop_outputs_are_png(tmp_path: Path):
     assert len(list((tmp_path / "crops").rglob("*.png"))) == 2
 
 
+def test_run_crop_reports_file_progress(tmp_path: Path):
+    config, _ = initialize_work_dir(tmp_path)
+    image_path = tmp_path / "frames_raw" / "ep01.png"
+    _save_image(image_path, (255, 255, 255))
+    config["crop"]["input_dir"] = "frames_raw"
+    config["crop_types"] = {
+        "full": True,
+        "hard_split": False,
+        "face": False,
+        "body": False,
+        "halfbody": False,
+        "background": False,
+        "random_crop": False,
+    }
+    messages = []
+
+    saved, log_path = run_crop(tmp_path, config, progress=messages.append)
+
+    assert saved == 1
+    assert log_path.exists()
+    assert "crop 1/1: ep01.png" in messages
+    assert "ep01.png: saved 1 crops, total 1" in messages
+
+
 def test_crop_skips_detection_when_semantic_types_are_disabled(tmp_path: Path):
     config, _ = initialize_work_dir(tmp_path)
     image_path = tmp_path / "frames_dedup" / "ep01_f0000000001_t000001.000.png"
