@@ -6,7 +6,9 @@ from dataclasses import dataclass
 import json
 import math
 import random
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -98,13 +100,25 @@ def extract_frames_for_video(
 ) -> tuple[int, list[dict[str, object]]]:
     params = config["extract"]
     video_path = resolve_work_path(work_dir, video.video_path)
+    keyframe_only = bool(params.get("keyframe_only", False))
+    if keyframe_only:
+        return _extract_keyframes_for_video(
+            work_dir,
+            params,
+            video,
+            video_path,
+            ignore_state,
+            output_dir,
+            stop_state,
+            progress,
+        )
+
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         return 0, [_error_row(video, f"cannot open video: {video_path}")]
 
     png_compression = int(params["png_compression"])
     ranges = active_ranges_for_episode(ignore_state, video.episode_id)
-    keyframe_only = bool(params.get("keyframe_only", False))
     phash_threshold = int(params.get("phash_threshold", 5))
     group_seconds_per_keep = float(params.get("group_seconds_per_keep", 5.0))
     group_max_duration = float(params.get("group_max_duration", 60.0))
@@ -117,142 +131,94 @@ def extract_frames_for_video(
     last_group_hash: imagehash.ImageHash | None = None
     group_index = 0
 
-    if keyframe_only:
-        # keyframe mode: interval/max_gap/pHash dedup are ignored.
-        keyframes = _probe_keyframe_timestamps(video_path, progress=progress)
-        if progress:
-            progress(f"{video.video_name}: found {len(keyframes)} keyframes")
-        if not keyframes:
-            rows.append(_error_row(video, f"no keyframes found: {video_path}"))
-        for frame_index, timestamp in keyframes:
-            if stop_state and stop_state.get("stop"):
-                break
-            ignored = match_ignore(timestamp, ranges)
-            if ignored:
-                rows.append(
-                    _base_row(
-                        video,
-                        frame_index,
-                        timestamp,
-                        ignored=True,
-                        ignore_label=ignored.get("label", ""),
-                        ignore_start=ignored.get("start", ""),
-                        ignore_end=ignored.get("end", ""),
-                        status="skipped_ignore",
-                    )
-                )
-                continue
-            cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
-            ok, frame = cap.read()
-            if not ok:
-                rows.append(_base_row(video, frame_index, timestamp, status="error", error="cannot retrieve keyframe"))
-                continue
-            processed = _prepare_for_output(frame, int(params["crop_bottom"]), int(params["min_width"]))
-            filename = f"{video.episode_id}_f{frame_index:010d}_t{timestamp_token(timestamp)}.png"
-            output_path = output_dir / filename
-            success = cv2.imwrite(str(output_path), processed, [cv2.IMWRITE_PNG_COMPRESSION, png_compression])
-            status = "saved" if success else "error"
-            error = "" if success else "cv2.imwrite failed"
-            if success:
-                saved_count += 1
+    stopped = False
+    fps = cap.get(cv2.CAP_PROP_FPS) or video.fps or 24.0
+    frame_step = max(1, int(round(float(params["interval"]) * fps)))
+    frame_index = 0
+    while True:
+        if _stop_requested(stop_state):
+            stopped = True
+            break
+        ok = cap.grab()
+        if not ok:
+            break
+        if frame_index % frame_step != 0:
+            frame_index += 1
+            continue
+        ok, frame = cap.retrieve()
+        if not ok:
+            rows.append(_base_row(video, frame_index, frame_index / fps, status="error", error="cannot retrieve frame"))
+            frame_index += 1
+            continue
+        timestamp = frame_index / fps
+        ignored = match_ignore(timestamp, ranges)
+        if ignored:
             rows.append(
                 _base_row(
                     video,
                     frame_index,
                     timestamp,
-                    image=filename if success else "",
-                    reason="keyframe",
-                    output_path=relative_to_or_absolute(output_path, work_dir) if success else "",
-                    status=status,
-                    error=error,
+                    ignored=True,
+                    ignore_label=ignored.get("label", ""),
+                    ignore_start=ignored.get("start", ""),
+                    ignore_end=ignored.get("end", ""),
+                    status="skipped_ignore",
                 )
             )
-    else:
-        fps = cap.get(cv2.CAP_PROP_FPS) or video.fps or 24.0
-        frame_step = max(1, int(round(float(params["interval"]) * fps)))
-        frame_index = 0
-        while True:
-            if stop_state and stop_state.get("stop"):
-                break
-            ok = cap.grab()
-            if not ok:
-                break
-            if frame_index % frame_step != 0:
-                frame_index += 1
-                continue
-            ok, frame = cap.retrieve()
-            if not ok:
-                rows.append(_base_row(video, frame_index, frame_index / fps, status="error", error="cannot retrieve frame"))
-                frame_index += 1
-                continue
-            timestamp = frame_index / fps
-            ignored = match_ignore(timestamp, ranges)
-            if ignored:
-                rows.append(
-                    _base_row(
-                        video,
-                        frame_index,
-                        timestamp,
-                        ignored=True,
-                        ignore_label=ignored.get("label", ""),
-                        ignore_start=ignored.get("start", ""),
-                        ignore_end=ignored.get("end", ""),
-                        status="skipped_ignore",
-                    )
-                )
-                frame_index += 1
-                continue
-
-            processed = _prepare_for_output(frame, int(params["crop_bottom"]), int(params["min_width"]))
-
-            if group_start_ts is not None and (timestamp - group_start_ts) >= group_max_duration:
-                group_index, saved_delta = _finalize_group(
-                    group_frames,
-                    video,
-                    work_dir,
-                    output_dir,
-                    png_compression,
-                    rng,
-                    group_index,
-                    group_seconds_per_keep,
-                    rows,
-                )
-                saved_count += saved_delta
-                group_start_ts = None
-                last_group_hash = None
-
-            frame_hash = _phash_frame(processed, params)
-            if last_group_hash is None or (frame_hash - last_group_hash) > phash_threshold:
-                group_index, saved_delta = _finalize_group(
-                    group_frames,
-                    video,
-                    work_dir,
-                    output_dir,
-                    png_compression,
-                    rng,
-                    group_index,
-                    group_seconds_per_keep,
-                    rows,
-                )
-                saved_count += saved_delta
-                group_start_ts = timestamp
-                last_group_hash = frame_hash
-                group_frames = []
-            else:
-                last_group_hash = frame_hash
-
-            group_frames.append(
-                _PendingFrame(
-                    frame_index=frame_index,
-                    timestamp=timestamp,
-                    processed=processed,
-                    diff_score=None,
-                    reason="phash",
-                )
-            )
-
             frame_index += 1
+            continue
 
+        processed = _prepare_for_output(frame, int(params["crop_bottom"]), int(params["min_width"]))
+
+        if group_start_ts is not None and (timestamp - group_start_ts) >= group_max_duration:
+            group_index, saved_delta = _finalize_group(
+                group_frames,
+                video,
+                work_dir,
+                output_dir,
+                png_compression,
+                rng,
+                group_index,
+                group_seconds_per_keep,
+                rows,
+            )
+            saved_count += saved_delta
+            group_start_ts = None
+            last_group_hash = None
+
+        frame_hash = _phash_frame(processed, params)
+        if last_group_hash is None or (frame_hash - last_group_hash) > phash_threshold:
+            group_index, saved_delta = _finalize_group(
+                group_frames,
+                video,
+                work_dir,
+                output_dir,
+                png_compression,
+                rng,
+                group_index,
+                group_seconds_per_keep,
+                rows,
+            )
+            saved_count += saved_delta
+            group_start_ts = timestamp
+            last_group_hash = frame_hash
+            group_frames = []
+        else:
+            last_group_hash = frame_hash
+
+        group_frames.append(
+            _PendingFrame(
+                frame_index=frame_index,
+                timestamp=timestamp,
+                processed=processed,
+                diff_score=None,
+                reason="phash",
+            )
+        )
+
+        frame_index += 1
+
+    if not stopped:
         group_index, saved_delta = _finalize_group(
             group_frames,
             video,
@@ -268,6 +234,12 @@ def extract_frames_for_video(
 
     cap.release()
     return saved_count, rows
+
+
+@dataclass
+class _KeyframeInfo:
+    frame_index: int
+    timestamp: float
 
 
 @dataclass
@@ -368,7 +340,138 @@ def _crop_for_hash(image: Image.Image, mode: str) -> Image.Image:
     return image.crop((left, top, left + crop_width, top + crop_height))
 
 
-def _probe_keyframe_timestamps(video_path: Path, progress: ProgressCallback | None = None) -> list[tuple[int, float]]:
+def _extract_keyframes_for_video(
+    work_dir: Path,
+    params: dict[str, Any],
+    video: VideoInfo,
+    video_path: Path,
+    ignore_state: dict[str, Any],
+    output_dir: Path,
+    stop_state: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
+) -> tuple[int, list[dict[str, object]]]:
+    keyframes = _probe_keyframe_timestamps(video_path, stop_state=stop_state, progress=progress)
+    rows: list[dict[str, object]] = []
+    saved_count = 0
+    if progress:
+        progress(f"{video.video_name}: found {len(keyframes)} keyframes")
+    if _stop_requested(stop_state):
+        return 0, rows
+    if not keyframes:
+        rows.append(_error_row(video, f"no keyframes found: {video_path}"))
+        return 0, rows
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ranges = active_ranges_for_episode(ignore_state, video.episode_id)
+    with tempfile.TemporaryDirectory(prefix="anime-shot-keyframes-") as temp_name:
+        temp_dir = Path(temp_name)
+        temp_pattern = temp_dir / "keyframe_%010d.png"
+        ok, error = _export_iframes_with_ffmpeg(video_path, temp_pattern, params, stop_state, progress)
+        if not ok:
+            if not _stop_requested(stop_state):
+                rows.append(_error_row(video, error or f"ffmpeg failed for {video_path}"))
+            return 0, rows
+
+        exported = sorted(temp_dir.glob("keyframe_*.png"))
+        if len(exported) < len(keyframes):
+            rows.append(_error_row(video, f"ffmpeg exported {len(exported)} keyframes, expected {len(keyframes)}"))
+
+        for keyframe, exported_path in zip(keyframes, exported, strict=False):
+            if _stop_requested(stop_state):
+                break
+            ignored = match_ignore(keyframe.timestamp, ranges)
+            if ignored:
+                rows.append(
+                    _base_row(
+                        video,
+                        keyframe.frame_index,
+                        keyframe.timestamp,
+                        ignored=True,
+                        ignore_label=ignored.get("label", ""),
+                        ignore_start=ignored.get("start", ""),
+                        ignore_end=ignored.get("end", ""),
+                        status="skipped_ignore",
+                    )
+                )
+                continue
+
+            filename = f"{video.episode_id}_f{keyframe.frame_index:010d}_t{timestamp_token(keyframe.timestamp)}.png"
+            output_path = output_dir / filename
+            try:
+                shutil.move(str(exported_path), output_path)
+            except OSError as error:
+                rows.append(_base_row(video, keyframe.frame_index, keyframe.timestamp, reason="keyframe", status="error", error=str(error)))
+                continue
+            saved_count += 1
+            rows.append(
+                _base_row(
+                    video,
+                    keyframe.frame_index,
+                    keyframe.timestamp,
+                    image=filename,
+                    reason="keyframe",
+                    output_path=relative_to_or_absolute(output_path, work_dir),
+                    status="saved",
+                )
+            )
+    return saved_count, rows
+
+
+def _export_iframes_with_ffmpeg(
+    video_path: Path,
+    output_pattern: Path,
+    params: dict[str, Any],
+    stop_state: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
+) -> tuple[bool, str]:
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-skip_frame",
+        "nokey",
+        "-i",
+        str(video_path),
+        "-vsync",
+        "0",
+    ]
+    filters = _ffmpeg_output_filters(params)
+    if filters:
+        command.extend(["-vf", ",".join(filters)])
+    command.extend(
+        [
+            "-compression_level",
+            str(_png_compression_level(params)),
+            str(output_pattern),
+        ]
+    )
+    ok, stdout, stderr = _run_subprocess(command, stop_state=stop_state)
+    if not ok and progress and stderr:
+        progress(process_error_message(f"ffmpeg failed for {video_path}", _CompletedProcessError(command, stderr)))
+    return ok, stderr or stdout
+
+
+def _ffmpeg_output_filters(params: dict[str, Any]) -> list[str]:
+    filters: list[str] = []
+    crop_bottom = int(params.get("crop_bottom", 0))
+    if crop_bottom > 0:
+        filters.append(f"crop=iw:ih-{crop_bottom}:0:0")
+    min_width = int(params.get("min_width", 0))
+    if min_width > 0:
+        filters.append(f"scale='if(lt(iw\\,{min_width})\\,{min_width}\\,iw)':-1")
+    return filters
+
+
+def _png_compression_level(params: dict[str, Any]) -> int:
+    return max(0, min(9, int(params.get("png_compression", 3))))
+
+
+def _probe_keyframe_timestamps(
+    video_path: Path,
+    stop_state: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
+) -> list[_KeyframeInfo]:
     command = [
         "ffprobe",
         "-v",
@@ -377,24 +480,24 @@ def _probe_keyframe_timestamps(video_path: Path, progress: ProgressCallback | No
         "v:0",
         "-show_frames",
         "-show_entries",
-        "frame=key_frame,best_effort_timestamp_time,pts_time,pkt_pts_time",
+        "frame=key_frame,best_effort_timestamp_time,pts_time,pkt_pts_time,coded_picture_number",
         "-of",
         "json",
         str(video_path),
     ]
-    try:
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
-        payload = json.loads(result.stdout)
-    except subprocess.CalledProcessError as error:
+    ok, stdout, stderr = _run_subprocess(command, stop_state=stop_state)
+    if not ok:
         if progress:
-            progress(process_error_message(f"ffprobe failed for {video_path}", error))
+            progress(process_error_message(f"ffprobe failed for {video_path}", _CompletedProcessError(command, stderr)))
         return []
-    except (FileNotFoundError, json.JSONDecodeError) as error:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as error:
         if progress:
             progress(f"ffprobe failed for {video_path}: {error}")
         return []
-    timestamps: list[tuple[int, float]] = []
-    index = 0
+    timestamps: list[_KeyframeInfo] = []
+    fallback_index = 0
     for frame in payload.get("frames", []):
         if str(frame.get("key_frame", "")) != "1":
             continue
@@ -409,9 +512,47 @@ def _probe_keyframe_timestamps(video_path: Path, progress: ProgressCallback | No
             timestamp = float(ts_text)
         except (TypeError, ValueError):
             continue
-        timestamps.append((index, timestamp))
-        index += 1
+        try:
+            frame_index = int(frame.get("coded_picture_number", fallback_index))
+        except (TypeError, ValueError):
+            frame_index = fallback_index
+        timestamps.append(_KeyframeInfo(frame_index, timestamp))
+        fallback_index += 1
     return timestamps
+
+
+class _CompletedProcessError(subprocess.CalledProcessError):
+    def __init__(self, command: list[str], stderr: str):
+        super().__init__(returncode=1, cmd=command, stderr=stderr)
+
+
+def _run_subprocess(command: list[str], stop_state: dict[str, Any] | None = None) -> tuple[bool, str, str]:
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except FileNotFoundError as error:
+        return False, "", str(error)
+
+    while process.poll() is None:
+        if _stop_requested(stop_state):
+            process.terminate()
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            return False, stdout, stderr
+        try:
+            stdout, stderr = process.communicate(timeout=0.2)
+            return process.returncode == 0, stdout, stderr
+        except subprocess.TimeoutExpired:
+            continue
+
+    stdout, stderr = process.communicate()
+    return process.returncode == 0, stdout, stderr
+
+
+def _stop_requested(stop_state: dict[str, Any] | None) -> bool:
+    return bool(stop_state and stop_state.get("stop"))
 
 
 def _prepare_for_output(frame: np.ndarray, crop_bottom: int, min_width: int) -> np.ndarray:
