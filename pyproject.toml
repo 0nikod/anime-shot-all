@@ -12,8 +12,16 @@ dependencies = [
     "opencv-python>=4.10",
     "pillow>=10.4",
     "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "onnxruntime>=1.26.0",
+]
+gpu = [
     "onnxruntime-gpu>=1.26.0",
 ]
+
 
 [project.scripts]
 anime-shot-all = "anime_shot_all.cli:main"
@@ -32,14 +40,14 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchvision = [
-  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]

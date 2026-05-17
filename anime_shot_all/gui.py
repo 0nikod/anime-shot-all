@@ -575,7 +575,7 @@ def _run_crop_gui(work_dir: str, config: dict[str, Any], stop_state: dict[str, A
     stop_state["stop"] = False
     root = Path(work_dir).expanduser().resolve()
     params = updated["crop"]
-    input_dir = resolve_work_path(root, params.get("input_dir", "frames_dedup"))
+    input_dir = resolve_work_path(root, params.get("input_dir", "frames_raw"))
     output_dir = resolve_work_path(root, params.get("output_dir", "crops"))
     output_dir.mkdir(parents=True, exist_ok=True)
     images = collect_images(input_dir)
