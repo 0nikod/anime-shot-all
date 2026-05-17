@@ -533,7 +533,8 @@ def _run_extract(
     *values: Any,
 ):
     updated = _apply_gui_values(config, values)
-    stop_state = dict(stop_state or {})
+    if stop_state is None:
+        stop_state = {}
     stop_state["stop"] = False
     root = Path(work_dir).expanduser().resolve()
     selected_set = set(selected or [])
@@ -577,7 +578,8 @@ def _run_extract(
 
 def _run_crop_gui(work_dir: str, config: dict[str, Any], stop_state: dict[str, Any], *values: Any):
     updated = _apply_gui_values(config, values)
-    stop_state = dict(stop_state or {})
+    if stop_state is None:
+        stop_state = {}
     stop_state["stop"] = False
     root = Path(work_dir).expanduser().resolve()
     params = updated["crop"]
@@ -609,9 +611,10 @@ def _run_crop_gui(work_dir: str, config: dict[str, Any], stop_state: dict[str, A
 
 
 def _request_stop(stop_state: dict[str, Any]):
-    updated = dict(stop_state or {})
-    updated["stop"] = True
-    return updated, "stop requested"
+    if stop_state is None:
+        stop_state = {}
+    stop_state["stop"] = True
+    return stop_state, "stop requested"
 
 
 def _refresh_stats(work_dir: str, config: dict[str, Any]):

@@ -1,12 +1,22 @@
 import gradio as gr
 
-from anime_shot_all.gui import _scan_videos, build_app
+from anime_shot_all.gui import _request_stop, _scan_videos, build_app
 
 
 def test_gui_builds_blocks():
     app = build_app()
 
     assert isinstance(app, gr.Blocks)
+
+
+def test_request_stop_mutates_existing_state():
+    stop_state = {"stop": False}
+
+    returned, message = _request_stop(stop_state)
+
+    assert returned is stop_state
+    assert stop_state == {"stop": True}
+    assert message == "stop requested"
 
 
 def test_scan_videos_reports_missing_directory(tmp_path):
