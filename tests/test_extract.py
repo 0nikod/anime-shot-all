@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from anime_shot_all.config import initialize_work_dir
+from anime_shot_all import extract as extract_module
 from anime_shot_all.extract import extract_frames_for_video, extract_frames_for_videos, _probe_keyframe_timestamps
 from anime_shot_all.video import VideoInfo
 
@@ -24,7 +25,12 @@ def test_extract_frames_grouping(tmp_path: Path, monkeypatch):
             self.frames = 10
             self.current = 0
         def isOpened(self): return True
-        def get(self, prop): return 1.0
+        def get(self, prop):
+            if prop == extract_module.cv2.CAP_PROP_FPS:
+                return 1.0
+            if prop == extract_module.cv2.CAP_PROP_FRAME_COUNT:
+                return self.frames
+            return 0.0
         def grab(self):
             if self.current < self.frames:
                 self.current += 1
@@ -40,7 +46,8 @@ def test_extract_frames_grouping(tmp_path: Path, monkeypatch):
     # Mock phash to return same hash
     monkeypatch.setattr("anime_shot_all.extract._phash_frame", lambda f, p: 0)
 
-    saved_count, rows = extract_frames_for_video(tmp_path, config, video, {}, tmp_path / "out")
+    messages = []
+    saved_count, rows = extract_frames_for_video(tmp_path, config, video, {}, tmp_path / "out", progress=messages.append)
     
     # We have 10 frames (1 per sec). All have same hash.
     # Group max duration is 5.0. 
@@ -50,6 +57,8 @@ def test_extract_frames_grouping(tmp_path: Path, monkeypatch):
     # Total saved = 4
     
     assert saved_count == 4
+    assert any("fake: frame 5/10 (50%)" in message for message in messages)
+    assert any("saved 4" in message for message in messages)
 
 
 def test_probe_keyframe_timestamps_uses_stable_timestamp_fields(tmp_path: Path, monkeypatch):
@@ -122,6 +131,109 @@ def test_extract_keyframes_uses_ffmpeg_iframe_export_and_png_compression(tmp_pat
     assert rows[0]["frame_index"] == 12
     assert (tmp_path / "out" / "ep01_f0000000012_t000000.000.png").read_bytes() == b"png"
     assert [command[0] for command in commands] == ["ffprobe", "ffmpeg"]
+
+
+def test_extract_keyframes_reports_video_progress(tmp_path: Path, monkeypatch):
+    config, _ = initialize_work_dir(tmp_path)
+    config["extract"]["keyframe_only"] = True
+    config["extract"]["crop_bottom"] = 0
+    config["extract"]["min_width"] = 0
+
+    video = VideoInfo(
+        episode_id="ep01",
+        video_path="fake.mp4",
+        video_name="fake",
+        duration_sec=3.0,
+        fps=1.0,
+        width=64,
+        height=64,
+    )
+
+    def fake_run_subprocess(command, stop_state=None):
+        if command[0] == "ffprobe":
+            payload = {
+                "frames": [
+                    {"key_frame": 1, "best_effort_timestamp_time": "0.000000", "coded_picture_number": 0},
+                    {"key_frame": 1, "best_effort_timestamp_time": "1.000000", "coded_picture_number": 1},
+                    {"key_frame": 1, "best_effort_timestamp_time": "2.000000", "coded_picture_number": 2},
+                ]
+            }
+            return True, json.dumps(payload), ""
+        if command[0] == "ffmpeg":
+            output_pattern = Path(command[-1])
+            output_pattern.parent.mkdir(parents=True, exist_ok=True)
+            for index in range(1, 4):
+                (output_pattern.parent / f"keyframe_{index:010d}.png").write_bytes(b"png")
+            return True, "", ""
+        raise AssertionError(command)
+
+    monkeypatch.setattr("anime_shot_all.extract._run_subprocess", fake_run_subprocess)
+
+    messages = []
+    saved_count, _rows = extract_frames_for_video(tmp_path, config, video, {}, tmp_path / "out", progress=messages.append)
+
+    assert saved_count == 3
+    assert any("fake: keyframe 1/3 (33%)" in message for message in messages)
+    assert any("fake: keyframe 3/3 (100%), saved 3" in message for message in messages)
+
+
+def test_extract_frame_progress_is_throttled(tmp_path: Path, monkeypatch):
+    config, _ = initialize_work_dir(tmp_path)
+    config["extract"]["interval"] = 1.0
+    config["extract"]["group_max_duration"] = 1000.0
+    config["extract"]["group_seconds_per_keep"] = 1000.0
+    config["extract"]["keyframe_only"] = False
+    config["extract"]["crop_bottom"] = 0
+    config["extract"]["min_width"] = 0
+
+    video = VideoInfo(
+        episode_id="ep01",
+        video_path="fake.mp4",
+        video_name="fake",
+        duration_sec=100.0,
+        fps=1.0,
+        width=64,
+        height=64,
+    )
+
+    class FakeCap:
+        def __init__(self):
+            self.frames = 100
+            self.current = 0
+
+        def isOpened(self):
+            return True
+
+        def get(self, prop):
+            if prop == extract_module.cv2.CAP_PROP_FPS:
+                return 1.0
+            if prop == extract_module.cv2.CAP_PROP_FRAME_COUNT:
+                return self.frames
+            return 0.0
+
+        def grab(self):
+            if self.current < self.frames:
+                self.current += 1
+                return True
+            return False
+
+        def retrieve(self):
+            return True, np.zeros((64, 64, 3), dtype=np.uint8)
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr("anime_shot_all.extract.cv2.VideoCapture", lambda path: FakeCap())
+    monkeypatch.setattr("anime_shot_all.extract._phash_frame", lambda frame, params: 0)
+    monkeypatch.setattr("anime_shot_all.extract.cv2.imwrite", lambda *args: True)
+
+    messages = []
+    extract_frames_for_video(tmp_path, config, video, {}, tmp_path / "out", progress=messages.append)
+
+    frame_messages = [message for message in messages if "fake: frame" in message]
+    assert len(frame_messages) < 100
+    assert any("fake: frame 50/100 (50%)" in message for message in frame_messages)
+    assert any("fake: frame 100/100 (100%)" in message for message in frame_messages)
 
 
 def test_extract_stop_does_not_flush_pending_group(tmp_path: Path, monkeypatch):

@@ -553,7 +553,6 @@ def _run_extract(
             break
         logs.append(format_progress("extract", index, len(video_objs), video.video_name))
         yield updated, "\n".join(logs), stop_state
-        progress_messages: list[str] = []
         saved, video_rows = extract_frames_for_video(
             root,
             updated,
@@ -561,11 +560,10 @@ def _run_extract(
             ignore_state,
             output_dir,
             stop_state=stop_state,
-            progress=progress_messages.append,
+            progress=logs.append,
         )
         rows.extend(video_rows)
         saved_total += saved
-        logs.extend(progress_messages)
         logs.append(f"{video.episode_id}: saved {saved} frames from {video.video_name}")
         yield updated, "\n".join(logs), stop_state
     write_csv(log_path, EXTRACT_LOG_FIELDS, rows)

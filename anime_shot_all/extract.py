@@ -9,8 +9,9 @@ import random
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import imagehash
@@ -133,6 +134,13 @@ def extract_frames_for_video(
 
     stopped = False
     fps = cap.get(cv2.CAP_PROP_FPS) or video.fps or 24.0
+    progress_reporter = _VideoProgressReporter(
+        progress,
+        video.video_name,
+        "frame",
+        _estimate_total_frames(cap, video, fps),
+    )
+    progress_reporter.emit(0, saved_count, len(group_frames), force=True)
     frame_step = max(1, int(round(float(params["interval"]) * fps)))
     frame_index = 0
     while True:
@@ -144,11 +152,13 @@ def extract_frames_for_video(
             break
         if frame_index % frame_step != 0:
             frame_index += 1
+            progress_reporter.emit(frame_index, saved_count, len(group_frames))
             continue
         ok, frame = cap.retrieve()
         if not ok:
             rows.append(_base_row(video, frame_index, frame_index / fps, status="error", error="cannot retrieve frame"))
             frame_index += 1
+            progress_reporter.emit(frame_index, saved_count, len(group_frames))
             continue
         timestamp = frame_index / fps
         ignored = match_ignore(timestamp, ranges)
@@ -166,6 +176,7 @@ def extract_frames_for_video(
                 )
             )
             frame_index += 1
+            progress_reporter.emit(frame_index, saved_count, len(group_frames))
             continue
 
         processed = _prepare_for_output(frame, int(params["crop_bottom"]), int(params["min_width"]))
@@ -185,6 +196,7 @@ def extract_frames_for_video(
             saved_count += saved_delta
             group_start_ts = None
             last_group_hash = None
+            progress_reporter.emit(frame_index, saved_count, len(group_frames))
 
         frame_hash = _phash_frame(processed, params)
         if last_group_hash is None or (frame_hash - last_group_hash) > phash_threshold:
@@ -203,6 +215,7 @@ def extract_frames_for_video(
             group_start_ts = timestamp
             last_group_hash = frame_hash
             group_frames = []
+            progress_reporter.emit(frame_index, saved_count, len(group_frames))
         else:
             last_group_hash = frame_hash
 
@@ -217,6 +230,7 @@ def extract_frames_for_video(
         )
 
         frame_index += 1
+        progress_reporter.emit(frame_index, saved_count, len(group_frames))
 
     if not stopped:
         group_index, saved_delta = _finalize_group(
@@ -233,6 +247,7 @@ def extract_frames_for_video(
         saved_count += saved_delta
 
     cap.release()
+    progress_reporter.emit(frame_index, saved_count, len(group_frames), force=True)
     return saved_count, rows
 
 
@@ -249,6 +264,74 @@ class _PendingFrame:
     processed: np.ndarray
     diff_score: float | None
     reason: str
+
+
+class _VideoProgressReporter:
+    """Emit throttled, human-readable progress for one video."""
+
+    def __init__(
+        self,
+        progress: ProgressCallback | None,
+        video_name: str,
+        unit: str,
+        total: int,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        min_fraction_step: float = 0.05,
+        min_seconds: float = 2.0,
+    ) -> None:
+        self.progress = progress
+        self.video_name = video_name
+        self.unit = unit
+        self.total = max(0, total)
+        self.clock = clock
+        self.min_fraction_step = min_fraction_step
+        self.min_seconds = min_seconds
+        if self.total > 0:
+            self._min_current_step = max(1, int(math.ceil(self.total * self.min_fraction_step)))
+        else:
+            self._min_current_step = 0
+        self._last_current: int | None = None
+        self._last_time: float | None = None
+
+    def emit(self, current: int, saved: int, staged: int = 0, *, force: bool = False) -> None:
+        if not self.progress:
+            return
+        current = max(0, current)
+        if self.total > 0:
+            current = min(current, self.total)
+        now = self.clock()
+        fraction = current / self.total if self.total > 0 else 0.0
+        should_emit = force or self._last_current is None
+        if not should_emit and self.total > 0:
+            should_emit = current - self._last_current >= self._min_current_step or current >= self.total
+        if not should_emit and self._last_time is not None:
+            should_emit = now - self._last_time >= self.min_seconds
+        if not should_emit:
+            return
+
+        self._last_current = current
+        self._last_time = now
+        if self.total > 0:
+            location = f"{self.unit} {current}/{self.total} ({fraction:.0%})"
+        else:
+            location = f"{self.unit} {current}"
+        details = f"{self.video_name}: {location}, saved {saved}"
+        if staged > 0:
+            details = f"{details}, staged {staged}"
+        self.progress(details)
+
+
+def _estimate_total_frames(cap: cv2.VideoCapture, video: VideoInfo, fps: float) -> int:
+    try:
+        frame_count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    except (TypeError, ValueError):
+        frame_count = 0.0
+    if math.isfinite(frame_count) and frame_count > 0:
+        return int(round(frame_count))
+    if video.duration_sec > 0 and fps > 0:
+        return int(math.ceil(video.duration_sec * fps))
+    return 0
 
 
 def _finalize_group(
@@ -363,6 +446,8 @@ def _extract_keyframes_for_video(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     ranges = active_ranges_for_episode(ignore_state, video.episode_id)
+    progress_reporter = _VideoProgressReporter(progress, video.video_name, "keyframe", len(keyframes))
+    progress_reporter.emit(0, saved_count, force=True)
     with tempfile.TemporaryDirectory(prefix="anime-shot-keyframes-") as temp_name:
         temp_dir = Path(temp_name)
         temp_pattern = temp_dir / "keyframe_%010d.png"
@@ -376,7 +461,7 @@ def _extract_keyframes_for_video(
         if len(exported) < len(keyframes):
             rows.append(_error_row(video, f"ffmpeg exported {len(exported)} keyframes, expected {len(keyframes)}"))
 
-        for keyframe, exported_path in zip(keyframes, exported, strict=False):
+        for keyframe_index, (keyframe, exported_path) in enumerate(zip(keyframes, exported, strict=False), start=1):
             if _stop_requested(stop_state):
                 break
             ignored = match_ignore(keyframe.timestamp, ranges)
@@ -393,6 +478,7 @@ def _extract_keyframes_for_video(
                         status="skipped_ignore",
                     )
                 )
+                progress_reporter.emit(keyframe_index, saved_count, force=keyframe_index == len(keyframes))
                 continue
 
             filename = f"{video.episode_id}_f{keyframe.frame_index:010d}_t{timestamp_token(keyframe.timestamp)}.png"
@@ -401,6 +487,7 @@ def _extract_keyframes_for_video(
                 shutil.move(str(exported_path), output_path)
             except OSError as error:
                 rows.append(_base_row(video, keyframe.frame_index, keyframe.timestamp, reason="keyframe", status="error", error=str(error)))
+                progress_reporter.emit(keyframe_index, saved_count, force=keyframe_index == len(keyframes))
                 continue
             saved_count += 1
             rows.append(
@@ -414,6 +501,7 @@ def _extract_keyframes_for_video(
                     status="saved",
                 )
             )
+            progress_reporter.emit(keyframe_index, saved_count, force=keyframe_index == len(keyframes))
     return saved_count, rows
 
 
