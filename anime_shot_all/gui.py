@@ -544,14 +544,21 @@ def _run_extract(
     log_path = resolve_work_path(root, updated["logging"]["extract_log"])
     ignore_state = load_ignore_state(root)
     rows: list[dict[str, object]] = []
-    logs = [f"extract videos: {len(video_objs)}", f"output: {output_dir}"]
+    logs: list[str] = []
+
+    def append_log(message: str) -> None:
+        logs.append(message)
+        print(message, flush=True)
+
+    append_log(f"extract videos: {len(video_objs)}")
+    append_log(f"output: {output_dir}")
     saved_total = 0
     yield updated, "\n".join(logs), stop_state
     for index, video in enumerate(video_objs, start=1):
         if stop_state and stop_state.get("stop"):
-            logs.append("stopped by user")
+            append_log("stopped by user")
             break
-        logs.append(format_progress("extract", index, len(video_objs), video.video_name))
+        append_log(format_progress("extract", index, len(video_objs), video.video_name))
         yield updated, "\n".join(logs), stop_state
         saved, video_rows = extract_frames_for_video(
             root,
@@ -560,15 +567,15 @@ def _run_extract(
             ignore_state,
             output_dir,
             stop_state=stop_state,
-            progress=logs.append,
+            progress=append_log,
         )
         rows.extend(video_rows)
         saved_total += saved
-        logs.append(f"{video.episode_id}: saved {saved} frames from {video.video_name}")
+        append_log(f"{video.episode_id}: saved {saved} frames from {video.video_name}")
         yield updated, "\n".join(logs), stop_state
     write_csv(log_path, EXTRACT_LOG_FIELDS, rows)
-    logs.append(f"saved total: {saved_total}")
-    logs.append(f"log: {log_path}")
+    append_log(f"saved total: {saved_total}")
+    append_log(f"log: {log_path}")
     yield updated, "\n".join(logs), stop_state
 
 

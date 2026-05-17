@@ -1,10 +1,9 @@
-import json
 from pathlib import Path
 import numpy as np
 
 from anime_shot_all.config import initialize_work_dir
 from anime_shot_all import extract as extract_module
-from anime_shot_all.extract import extract_frames_for_video, extract_frames_for_videos, _probe_keyframe_timestamps
+from anime_shot_all.extract import extract_frames_for_video, extract_frames_for_videos, _parse_showinfo_keyframes
 from anime_shot_all.video import VideoInfo
 
 def test_extract_frames_grouping(tmp_path: Path, monkeypatch):
@@ -61,31 +60,19 @@ def test_extract_frames_grouping(tmp_path: Path, monkeypatch):
     assert any("saved 4" in message for message in messages)
 
 
-def test_probe_keyframe_timestamps_uses_stable_timestamp_fields(tmp_path: Path, monkeypatch):
-    payload = {
-        "frames": [
-            {"key_frame": 1, "best_effort_timestamp_time": "0.000000", "coded_picture_number": 0},
-            {"key_frame": 0, "best_effort_timestamp_time": "1.000000"},
-            {"key_frame": 1, "pts_time": "2.000000", "coded_picture_number": 48},
-            {"key_frame": 1, "pkt_pts_time": "3.000000"},
-            {"key_frame": 1, "best_effort_timestamp_time": "N/A"},
-            {"key_frame": 1},
+def test_parse_showinfo_keyframes_uses_timestamp_and_fps():
+    output = "\n".join(
+        [
+            "[Parsed_showinfo_1 @ 0x1] n:   0 pts:0 pts_time:0 pos:1",
+            "noise",
+            "[Parsed_showinfo_1 @ 0x1] n:   1 pts:1000 pts_time:2.000000 pos:2",
+            "[Parsed_showinfo_1 @ 0x1] n:   2 pts:2000 pts_time:N/A pos:3",
         ]
-    }
-    commands = []
+    )
 
-    def fake_run_subprocess(command, stop_state=None):
-        commands.append(command)
-        assert "frame=key_frame,best_effort_timestamp_time,pts_time,pkt_pts_time,coded_picture_number" in command
-        assert "json" in command
-        return True, json.dumps(payload), ""
+    keyframes = _parse_showinfo_keyframes(output, fps=24.0)
 
-    monkeypatch.setattr("anime_shot_all.extract._run_subprocess", fake_run_subprocess)
-
-    keyframes = _probe_keyframe_timestamps(tmp_path / "fake.mp4")
-
-    assert [(item.frame_index, item.timestamp) for item in keyframes] == [(0, 0.0), (48, 2.0), (2, 3.0)]
-    assert commands
+    assert [(item.frame_index, item.timestamp) for item in keyframes] == [(0, 0.0), (48, 2.0)]
 
 
 def test_extract_keyframes_uses_ffmpeg_iframe_export_and_png_compression(tmp_path: Path, monkeypatch):
@@ -100,7 +87,7 @@ def test_extract_keyframes_uses_ffmpeg_iframe_export_and_png_compression(tmp_pat
         video_path="fake.mp4",
         video_name="fake",
         duration_sec=2.0,
-        fps=1.0,
+        fps=24.0,
         width=64,
         height=64,
     )
@@ -109,17 +96,15 @@ def test_extract_keyframes_uses_ffmpeg_iframe_export_and_png_compression(tmp_pat
 
     def fake_run_subprocess(command, stop_state=None):
         commands.append(command)
-        if command[0] == "ffprobe":
-            payload = {"frames": [{"key_frame": 1, "best_effort_timestamp_time": "0.000000", "coded_picture_number": 12}]}
-            return True, json.dumps(payload), ""
         if command[0] == "ffmpeg":
             output_pattern = Path(command[-1])
             assert "-skip_frame" in command
             assert "nokey" in command
+            assert "showinfo" in command[command.index("-vf") + 1]
             assert command[command.index("-compression_level") + 1] == "7"
             output_pattern.parent.mkdir(parents=True, exist_ok=True)
             (output_pattern.parent / "keyframe_0000000001.png").write_bytes(b"png")
-            return True, "", ""
+            return True, "", "[Parsed_showinfo_1 @ 0x1] n: 0 pts:500 pts_time:0.5 pos:1"
         raise AssertionError(command)
 
     monkeypatch.setattr("anime_shot_all.extract._run_subprocess", fake_run_subprocess)
@@ -129,8 +114,8 @@ def test_extract_keyframes_uses_ffmpeg_iframe_export_and_png_compression(tmp_pat
     assert saved_count == 1
     assert rows[0]["status"] == "saved"
     assert rows[0]["frame_index"] == 12
-    assert (tmp_path / "out" / "ep01_f0000000012_t000000.000.png").read_bytes() == b"png"
-    assert [command[0] for command in commands] == ["ffprobe", "ffmpeg"]
+    assert (tmp_path / "out" / "ep01_f0000000012_t000000.500.png").read_bytes() == b"png"
+    assert [command[0] for command in commands] == ["ffmpeg"]
 
 
 def test_extract_keyframes_reports_video_progress(tmp_path: Path, monkeypatch):
@@ -150,21 +135,18 @@ def test_extract_keyframes_reports_video_progress(tmp_path: Path, monkeypatch):
     )
 
     def fake_run_subprocess(command, stop_state=None):
-        if command[0] == "ffprobe":
-            payload = {
-                "frames": [
-                    {"key_frame": 1, "best_effort_timestamp_time": "0.000000", "coded_picture_number": 0},
-                    {"key_frame": 1, "best_effort_timestamp_time": "1.000000", "coded_picture_number": 1},
-                    {"key_frame": 1, "best_effort_timestamp_time": "2.000000", "coded_picture_number": 2},
-                ]
-            }
-            return True, json.dumps(payload), ""
         if command[0] == "ffmpeg":
             output_pattern = Path(command[-1])
             output_pattern.parent.mkdir(parents=True, exist_ok=True)
             for index in range(1, 4):
                 (output_pattern.parent / f"keyframe_{index:010d}.png").write_bytes(b"png")
-            return True, "", ""
+            return True, "", "\n".join(
+                [
+                    "[Parsed_showinfo_1 @ 0x1] n: 0 pts:0 pts_time:0.000000 pos:1",
+                    "[Parsed_showinfo_1 @ 0x1] n: 1 pts:1 pts_time:1.000000 pos:2",
+                    "[Parsed_showinfo_1 @ 0x1] n: 2 pts:2 pts_time:2.000000 pos:3",
+                ]
+            )
         raise AssertionError(command)
 
     monkeypatch.setattr("anime_shot_all.extract._run_subprocess", fake_run_subprocess)
@@ -175,6 +157,53 @@ def test_extract_keyframes_reports_video_progress(tmp_path: Path, monkeypatch):
     assert saved_count == 3
     assert any("fake: keyframe 1/3 (33%)" in message for message in messages)
     assert any("fake: keyframe 3/3 (100%), saved 3" in message for message in messages)
+
+
+def test_extract_keyframes_filters_ignored_showinfo_frames(tmp_path: Path, monkeypatch):
+    config, _ = initialize_work_dir(tmp_path)
+    config["extract"]["keyframe_only"] = True
+    config["extract"]["crop_bottom"] = 0
+    config["extract"]["min_width"] = 0
+
+    video = VideoInfo(
+        episode_id="ep01",
+        video_path="fake.mp4",
+        video_name="fake",
+        duration_sec=2.0,
+        fps=1.0,
+        width=64,
+        height=64,
+    )
+    ignore_state = {
+        "episodes": [
+            {
+                "episode_id": "ep01",
+                "video_path": "fake.mp4",
+                "ignore_ranges": [{"start": "1.0", "end": "2.0", "label": "op", "enabled": True}],
+            }
+        ]
+    }
+
+    def fake_run_subprocess(command, stop_state=None):
+        output_pattern = Path(command[-1])
+        output_pattern.parent.mkdir(parents=True, exist_ok=True)
+        for index in range(1, 3):
+            (output_pattern.parent / f"keyframe_{index:010d}.png").write_bytes(f"png{index}".encode())
+        return True, "", "\n".join(
+            [
+                "[Parsed_showinfo_1 @ 0x1] n: 0 pts:0 pts_time:0.000000 pos:1",
+                "[Parsed_showinfo_1 @ 0x1] n: 1 pts:1 pts_time:1.000000 pos:2",
+            ]
+        )
+
+    monkeypatch.setattr("anime_shot_all.extract._run_subprocess", fake_run_subprocess)
+
+    saved_count, rows = extract_frames_for_video(tmp_path, config, video, ignore_state, tmp_path / "out")
+
+    assert saved_count == 1
+    assert [row["status"] for row in rows] == ["saved", "skipped_ignore"]
+    assert rows[1]["ignore_label"] == "op"
+    assert sorted(path.name for path in (tmp_path / "out").glob("*.png")) == ["ep01_f0000000000_t000000.000.png"]
 
 
 def test_extract_frame_progress_is_throttled(tmp_path: Path, monkeypatch):

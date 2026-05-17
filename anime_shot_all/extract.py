@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import math
 import random
+import re
 import shutil
 import subprocess
 import tempfile
@@ -433,34 +433,34 @@ def _extract_keyframes_for_video(
     stop_state: dict[str, Any] | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[int, list[dict[str, object]]]:
-    keyframes = _probe_keyframe_timestamps(video_path, stop_state=stop_state, progress=progress)
     rows: list[dict[str, object]] = []
     saved_count = 0
-    if progress:
-        progress(f"{video.video_name}: found {len(keyframes)} keyframes")
-    if _stop_requested(stop_state):
-        return 0, rows
-    if not keyframes:
-        rows.append(_error_row(video, f"no keyframes found: {video_path}"))
-        return 0, rows
 
     output_dir.mkdir(parents=True, exist_ok=True)
     ranges = active_ranges_for_episode(ignore_state, video.episode_id)
-    progress_reporter = _VideoProgressReporter(progress, video.video_name, "keyframe", len(keyframes))
-    progress_reporter.emit(0, saved_count, force=True)
     with tempfile.TemporaryDirectory(prefix="anime-shot-keyframes-") as temp_name:
         temp_dir = Path(temp_name)
         temp_pattern = temp_dir / "keyframe_%010d.png"
-        ok, error = _export_iframes_with_ffmpeg(video_path, temp_pattern, params, stop_state, progress)
+        ok, output = _export_iframes_with_ffmpeg(video_path, temp_pattern, params, stop_state, progress)
         if not ok:
             if not _stop_requested(stop_state):
-                rows.append(_error_row(video, error or f"ffmpeg failed for {video_path}"))
+                rows.append(_error_row(video, output or f"ffmpeg failed for {video_path}"))
             return 0, rows
 
         exported = sorted(temp_dir.glob("keyframe_*.png"))
-        if len(exported) < len(keyframes):
-            rows.append(_error_row(video, f"ffmpeg exported {len(exported)} keyframes, expected {len(keyframes)}"))
+        keyframes = _parse_showinfo_keyframes(output, float(video.fps or 0.0))
+        if progress:
+            progress(f"{video.video_name}: found {len(keyframes)} keyframes")
+        if _stop_requested(stop_state):
+            return 0, rows
+        if not keyframes:
+            rows.append(_error_row(video, f"no keyframes found: {video_path}"))
+            return 0, rows
+        if len(exported) != len(keyframes):
+            rows.append(_error_row(video, f"ffmpeg exported {len(exported)} keyframes, showinfo reported {len(keyframes)}"))
 
+        progress_reporter = _VideoProgressReporter(progress, video.video_name, "keyframe", len(keyframes))
+        progress_reporter.emit(0, saved_count, force=True)
         for keyframe_index, (keyframe, exported_path) in enumerate(zip(keyframes, exported, strict=False), start=1):
             if _stop_requested(stop_state):
                 break
@@ -516,7 +516,7 @@ def _export_iframes_with_ffmpeg(
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
-        "error",
+        "info",
         "-skip_frame",
         "nokey",
         "-i",
@@ -525,6 +525,7 @@ def _export_iframes_with_ffmpeg(
         "0",
     ]
     filters = _ffmpeg_output_filters(params)
+    filters.append("showinfo")
     if filters:
         command.extend(["-vf", ",".join(filters)])
     command.extend(
@@ -540,6 +541,33 @@ def _export_iframes_with_ffmpeg(
     return ok, stderr or stdout
 
 
+_SHOWINFO_INDEX_PATTERN = re.compile(r"\bn:\s*([^\s]+)")
+_SHOWINFO_TIMESTAMP_PATTERN = re.compile(r"\bpts_time:\s*([^\s]+)")
+
+
+def _parse_showinfo_keyframes(output: str, fps: float) -> list[_KeyframeInfo]:
+    keyframes: list[_KeyframeInfo] = []
+    fallback_index = 0
+    for line in output.splitlines():
+        if "showinfo" not in line or "pts_time:" not in line:
+            continue
+        timestamp_match = _SHOWINFO_TIMESTAMP_PATTERN.search(line)
+        if timestamp_match is None:
+            continue
+        try:
+            timestamp = float(timestamp_match.group(1))
+        except (TypeError, ValueError):
+            continue
+        index_match = _SHOWINFO_INDEX_PATTERN.search(line)
+        try:
+            frame_index = int(round(timestamp * fps)) if fps > 0 else int(index_match.group(1) if index_match else fallback_index)
+        except (TypeError, ValueError):
+            frame_index = fallback_index
+        keyframes.append(_KeyframeInfo(frame_index, timestamp))
+        fallback_index += 1
+    return keyframes
+
+
 def _ffmpeg_output_filters(params: dict[str, Any]) -> list[str]:
     filters: list[str] = []
     crop_bottom = int(params.get("crop_bottom", 0))
@@ -553,60 +581,6 @@ def _ffmpeg_output_filters(params: dict[str, Any]) -> list[str]:
 
 def _png_compression_level(params: dict[str, Any]) -> int:
     return max(0, min(9, int(params.get("png_compression", 3))))
-
-
-def _probe_keyframe_timestamps(
-    video_path: Path,
-    stop_state: dict[str, Any] | None = None,
-    progress: ProgressCallback | None = None,
-) -> list[_KeyframeInfo]:
-    command = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_frames",
-        "-show_entries",
-        "frame=key_frame,best_effort_timestamp_time,pts_time,pkt_pts_time,coded_picture_number",
-        "-of",
-        "json",
-        str(video_path),
-    ]
-    ok, stdout, stderr = _run_subprocess(command, stop_state=stop_state)
-    if not ok:
-        if progress:
-            progress(process_error_message(f"ffprobe failed for {video_path}", _CompletedProcessError(command, stderr)))
-        return []
-    try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as error:
-        if progress:
-            progress(f"ffprobe failed for {video_path}: {error}")
-        return []
-    timestamps: list[_KeyframeInfo] = []
-    fallback_index = 0
-    for frame in payload.get("frames", []):
-        if str(frame.get("key_frame", "")) != "1":
-            continue
-        ts_text = (
-            frame.get("best_effort_timestamp_time")
-            or frame.get("pts_time")
-            or frame.get("pkt_pts_time")
-        )
-        if ts_text is None:
-            continue
-        try:
-            timestamp = float(ts_text)
-        except (TypeError, ValueError):
-            continue
-        try:
-            frame_index = int(frame.get("coded_picture_number", fallback_index))
-        except (TypeError, ValueError):
-            frame_index = fallback_index
-        timestamps.append(_KeyframeInfo(frame_index, timestamp))
-        fallback_index += 1
-    return timestamps
 
 
 class _CompletedProcessError(subprocess.CalledProcessError):
