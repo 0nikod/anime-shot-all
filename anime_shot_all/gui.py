@@ -272,7 +272,7 @@ def build_app() -> gr.Blocks:
                         "halfbody_expand_top",
                         "halfbody_expand_bottom",
                         "halfbody_expand_lr",
-                        "min_crop_size",
+                        "min_bbox_size",
                         "crop_png_compression",
                         "target_crops_per_image",
                     ],
@@ -286,7 +286,7 @@ def build_app() -> gr.Blocks:
                 halfbody_expand_top = crop_size_params["halfbody_expand_top"]
                 halfbody_expand_bottom = crop_size_params["halfbody_expand_bottom"]
                 halfbody_expand_lr = crop_size_params["halfbody_expand_lr"]
-                min_crop_size = crop_size_params["min_crop_size"]
+                min_bbox_size = crop_size_params["min_bbox_size"]
                 crop_png_compression = crop_size_params["crop_png_compression"]
                 target_crops_per_image = crop_size_params["target_crops_per_image"]
             with gr.Row():
@@ -345,7 +345,7 @@ def build_app() -> gr.Blocks:
             halfbody_expand_top,
             halfbody_expand_bottom,
             halfbody_expand_lr,
-            min_crop_size,
+            min_bbox_size,
             crop_png_compression,
             target_crops_per_image,
         ]
@@ -674,7 +674,7 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
         halfbody_expand_top,
         halfbody_expand_bottom,
         halfbody_expand_lr,
-        min_crop_size,
+        min_bbox_size,
         crop_png_compression,
         target_crops_per_image,
     ) = values
@@ -703,7 +703,7 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
             "output_dir": relative_path_value(crop_output, root),
             "output_strategy": output_strategy,
             "random_seed": int(random_seed),
-            "min_crop_size": int(min_crop_size),
+            "min_bbox_size": int(min_bbox_size),
             "png_compression": int(crop_png_compression),
             "target_crops_per_image": int(target_crops_per_image),
         }
