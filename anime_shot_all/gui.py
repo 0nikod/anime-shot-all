@@ -8,6 +8,7 @@ from typing import Any
 import gradio as gr
 
 from .config import (
+    deep_merge,
     initialize_work_dir,
     load_project_config,
     reset_params_from_default,
@@ -16,6 +17,7 @@ from .config import (
     write_yaml,
 )
 from .crop import run_crop
+from .defaults import builtin_defaults
 from .extract import extract_frames_for_videos
 from .ignore_ranges import (
     export_csv,
@@ -445,9 +447,29 @@ def _export_yaml(work_dir: str, config: dict[str, Any], export_path: str):
 
 def _scan_videos(work_dir: str, video_dir: str, config: dict[str, Any]):
     root = Path(work_dir).expanduser().resolve()
-    videos = scan_videos(resolve_work_path(root, video_dir), root, config["project"]["supported_video_ext"])
+    config = _config_for_scan(root, config)
+    video_path = resolve_work_path(root, video_dir)
+    if not video_path.exists():
+        return _empty_video_scan(f"视频文件夹不存在: {video_path}")
+    if not video_path.is_dir():
+        return _empty_video_scan(f"视频路径不是文件夹: {video_path}")
+    videos = scan_videos(video_path, root, config["project"]["supported_video_ext"])
     choices = [item.video_name for item in videos]
     return videos_as_dicts(videos), videos_to_rows(videos), f"scanned {len(videos)} videos", gr.update(choices=choices, value=choices)
+
+
+def _config_for_scan(root: Path, config: dict[str, Any] | None) -> dict[str, Any]:
+    defaults = builtin_defaults()
+    defaults["project"]["work_dir"] = str(root)
+    try:
+        base = load_project_config(root)
+    except FileNotFoundError:
+        base = defaults
+    return deep_merge(base, config or {})
+
+
+def _empty_video_scan(message: str):
+    return [], [], message, gr.update(choices=[], value=[])
 
 
 def _load_ignore(work_dir: str):
