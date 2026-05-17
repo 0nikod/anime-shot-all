@@ -56,7 +56,7 @@ def resolve_work_path(work_dir: Path, value: str | Path) -> Path:
     """Resolve a possibly relative project path against ``work_dir``."""
 
     path = Path(value).expanduser()
-    if path.is_absolute():
+    if path.is_absolute() or path.root:
         return path
     return work_dir / path
 
