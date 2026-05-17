@@ -82,7 +82,7 @@ PARAM_SCHEMA: dict[str, dict[str, Any]] = {
     "halfbody_expand_top": {"component": "number", "label": "halfbody_expand_top", "value": 1.2, "info": "半身 bbox 向上外扩倍数。"},
     "halfbody_expand_bottom": {"component": "number", "label": "halfbody_expand_bottom", "value": 1.25, "info": "半身 bbox 向下外扩倍数。"},
     "halfbody_expand_lr": {"component": "number", "label": "halfbody_expand_lr", "value": 1.2, "info": "半身 bbox 左右外扩倍数。"},
-    "min_crop_size": {"component": "number", "label": "min_crop_size", "value": 128, "info": "小于该尺寸的 crop 跳过。"},
+    "min_bbox_size": {"component": "number", "label": "min_bbox_size", "value": 768, "info": "小于该尺寸的 bbox 跳过。"},
     "crop_png_compression": {"component": "slider", "label": "png_compression", "value": 3, "minimum": 0, "maximum": 9, "step": 1, "info": "裁剪 PNG 压缩等级。"},
     "target_crops_per_image": {"component": "number", "label": "target_crops_per_image", "value": 3, "info": "随机权重策略每图最多输出数。"},
 }
