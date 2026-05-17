@@ -103,6 +103,9 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
             "16:9": 1.0,
         },
     },
+    "size_selection": {
+        "sigma": 0.35,
+    },
     "detection": {
         "conf_threshold": 0.35,
         "iou_threshold": 0.7,

@@ -70,6 +70,7 @@ PARAM_SCHEMA: dict[str, dict[str, Any]] = {
     "halfbody_level": {"component": "dropdown", "label": "halfbody level", "value": "s", "choices": ["n", "s"], "info": "n 更快，s 更准。"},
     "halfbody_version": {"component": "dropdown", "label": "halfbody version", "value": "v1.0", "choices": ["v1.0"], "info": "imgutils halfbody 检测模型版本。"},
     "ratio_sigma": {"component": "number", "label": "ratio sigma", "value": 0.45, "info": "越小越贴近 bbox 原始比例。"},
+    "size_sigma": {"component": "number", "label": "size sigma", "value": 0.35, "info": "越小越贴近原图 crop 面积选择输出尺寸。"},
     "max_ratio_change": {"component": "number", "label": "max ratio change", "value": 2.2, "info": "非 1:1 候选比例允许偏离 bbox 的最大倍数。"},
     "always_allow_square": {"component": "checkbox", "label": "always allow 1:1", "value": True, "info": "横竖 bbox 都允许少量输出正方形。"},
     "full_max_upscale": {"component": "number", "label": "full max upscale", "value": 2.0, "info": "full 模式小图最大放大倍数。"},
@@ -82,7 +83,7 @@ PARAM_SCHEMA: dict[str, dict[str, Any]] = {
     "halfbody_expand_top": {"component": "number", "label": "halfbody_expand_top", "value": 1.2, "info": "半身 bbox 向上外扩倍数。"},
     "halfbody_expand_bottom": {"component": "number", "label": "halfbody_expand_bottom", "value": 1.25, "info": "半身 bbox 向下外扩倍数。"},
     "halfbody_expand_lr": {"component": "number", "label": "halfbody_expand_lr", "value": 1.2, "info": "半身 bbox 左右外扩倍数。"},
-    "min_bbox_size": {"component": "number", "label": "min_bbox_size", "value": 768, "info": "小于该尺寸的 bbox 跳过。"},
+    "min_bbox_size": {"component": "number", "label": "min_bbox_size", "value": 768, "info": "实际写入 crop.min_crop_size；小于该尺寸的框会跳过。"},
     "crop_png_compression": {"component": "slider", "label": "png_compression", "value": 3, "minimum": 0, "maximum": 9, "step": 1, "info": "裁剪 PNG 压缩等级。"},
     "target_crops_per_image": {"component": "number", "label": "target_crops_per_image", "value": 3, "info": "随机权重策略每图最多输出数。"},
 }
@@ -253,10 +254,11 @@ def build_app() -> gr.Blocks:
                 halfbody_version = detection_params["halfbody_version"]
             with gr.Accordion("自动比例与随机参数", open=False):
                 aspect_params = _param_controls(
-                    ["ratio_sigma", "max_ratio_change", "always_allow_square", "full_max_upscale", "random_seed"],
+                    ["ratio_sigma", "size_sigma", "max_ratio_change", "always_allow_square", "full_max_upscale", "random_seed"],
                     columns=3,
                 )
                 ratio_sigma = aspect_params["ratio_sigma"]
+                size_sigma = aspect_params["size_sigma"]
                 max_ratio_change = aspect_params["max_ratio_change"]
                 always_allow_square = aspect_params["always_allow_square"]
                 full_max_upscale = aspect_params["full_max_upscale"]
@@ -325,6 +327,7 @@ def build_app() -> gr.Blocks:
             weight_halfbody,
             weight_random,
             ratio_sigma,
+            size_sigma,
             max_ratio_change,
             always_allow_square,
             full_max_upscale,
@@ -654,6 +657,7 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
         weight_halfbody,
         weight_random,
         ratio_sigma,
+        size_sigma,
         max_ratio_change,
         always_allow_square,
         full_max_upscale,
@@ -703,6 +707,7 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
             "output_dir": relative_path_value(crop_output, root),
             "output_strategy": output_strategy,
             "random_seed": int(random_seed),
+            "min_crop_size": int(min_bbox_size),
             "min_bbox_size": int(min_bbox_size),
             "png_compression": int(crop_png_compression),
             "target_crops_per_image": int(target_crops_per_image),
@@ -716,6 +721,7 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
             "always_allow_square": bool(always_allow_square),
         }
     )
+    cfg.setdefault("size_selection", {})["sigma"] = float(size_sigma)
     cfg["crop_types"] = {key: key in (crop_mode or []) for key in ["full", "face", "body", "halfbody", "random_crop"]}
     cfg["random_output_weights"].update(
         {
@@ -769,6 +775,7 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
 def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
     enabled_types = [key for key in ["full", "face", "body", "halfbody", "random_crop"] if config["crop_types"].get(key)]
     ratio_selection = config.get("ratio_selection", {})
+    size_selection = config.get("size_selection", {})
     full_crop = config.get("full_crop", {})
     return (
         config["project"].get("video_dir", "videos"),
@@ -795,6 +802,7 @@ def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
         config["random_output_weights"].get("halfbody", 25),
         config["random_output_weights"]["random_crop"],
         ratio_selection.get("sigma", 0.45),
+        size_selection.get("sigma", 0.35),
         ratio_selection.get("max_ratio_change", 2.2),
         ratio_selection.get("always_allow_square", True),
         full_crop.get("max_upscale", 2.0),
@@ -815,7 +823,7 @@ def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
         config.get("halfbody_crop", {}).get("expand_top", 1.2),
         config.get("halfbody_crop", {}).get("expand_bottom", 1.25),
         config.get("halfbody_crop", {}).get("expand_left", 1.2),
-        config["crop"]["min_crop_size"],
+        config["crop"].get("min_bbox_size", config["crop"].get("min_crop_size", 128)),
         config["crop"]["png_compression"],
         config["crop"]["target_crops_per_image"],
     )
@@ -825,4 +833,3 @@ def _deep_copy_config(config: dict[str, Any]) -> dict[str, Any]:
     import copy
 
     return copy.deepcopy(config)
-

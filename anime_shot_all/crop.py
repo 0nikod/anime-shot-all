@@ -49,7 +49,6 @@ CROP_LOG_FIELDS = [
     "output_image",
     "episode_id",
     "crop_type",
-    "producer_type",
     "x1",
     "y1",
     "x2",
@@ -67,18 +66,17 @@ CROP_LOG_FIELDS = [
     "output_width",
     "output_height",
     "output_area",
-    "aspect_mode",
+    "source_crop_area",
     "bbox_ratio",
     "selected_ratio",
-    "padding_x",
-    "padding_y",
+    "expand_left",
+    "expand_top",
+    "expand_right",
+    "expand_bottom",
     "model_path",
     "conf",
     "class_id",
     "score",
-    "random_seed",
-    "fallback_used",
-    "fallback_reason",
     "reason",
     "status",
     "error",
@@ -95,17 +93,16 @@ class Detection:
 @dataclass
 class CropCandidate:
     crop_type: str
-    producer_type: str
     box: tuple[float, float, float, float]
     reason: str
     model_path: str = ""
     conf: float | str = ""
     class_id: int | str = ""
     score: float | str = ""
-    padding_x: float | str = ""
-    padding_y: float | str = ""
-    fallback_used: bool = False
-    fallback_reason: str = ""
+    expand_left: float | str = ""
+    expand_top: float | str = ""
+    expand_right: float | str = ""
+    expand_bottom: float | str = ""
 
 
 @dataclass
@@ -116,6 +113,7 @@ class PreparedCrop:
     selected_ratio: str
     output_size: tuple[int, int]
     bbox_ratio: float
+    source_crop_area: int
     reason: str
 
 
@@ -224,7 +222,7 @@ def _build_candidates(
     for crop_type in CROP_MODES:
         if not enabled.get(crop_type, True):
             continue
-        produced = _produce_candidates(crop_type, crop_type, image, config, rng, detections, False, "")
+        produced = _produce_candidates(crop_type, image, config, rng, detections)
         if produced:
             candidates.extend(produced)
     return candidates
@@ -232,45 +230,36 @@ def _build_candidates(
 
 def _produce_candidates(
     crop_type: str,
-    producer_type: str,
     image: Image.Image,
     config: dict[str, Any],
     rng: random.Random,
     detections: dict[str, list[Detection]],
-    fallback_used: bool,
-    fallback_reason: str,
 ) -> list[CropCandidate]:
     width, height = image.size
-    if producer_type == "full":
+    if crop_type == "full":
         return [
             CropCandidate(
                 crop_type,
-                "full",
                 (0, 0, width, height),
-                "full_copy" if not fallback_used else "fallback_full",
-                fallback_used=fallback_used,
-                fallback_reason=fallback_reason,
+                "full_resize",
             )
         ]
-    if producer_type in {"face", "body", "halfbody"}:
-        return _detection_candidates(crop_type, producer_type, detections.get(producer_type, []), config, fallback_used, fallback_reason)
-    if producer_type == "random_crop":
-        return _random_candidates(crop_type, width, height, config, rng, detections.get("body", []), fallback_used, fallback_reason)
+    if crop_type in {"face", "body", "halfbody"}:
+        return _detection_candidates(crop_type, detections.get(crop_type, []), config)
+    if crop_type == "random_crop":
+        return _random_candidates(width, height, config, rng, detections.get("body", []))
     return []
 
 
 def _detection_candidates(
     crop_type: str,
-    producer_type: str,
     detections: list[Detection],
     config: dict[str, Any],
-    fallback_used: bool,
-    fallback_reason: str,
 ) -> list[CropCandidate]:
-    params = _semantic_params(config, producer_type)
+    params = _semantic_params(config, crop_type)
     max_count = int(params["max_count_per_image"])
     min_size = int(params["min_size"])
-    model_kind = "person" if producer_type == "body" else producer_type
+    model_kind = "person" if crop_type == "body" else crop_type
     candidates = []
     for detection in sorted(detections, key=lambda item: item.score, reverse=True)[:max_count]:
         if not _valid_float_box(detection.box, min_size):
@@ -278,31 +267,27 @@ def _detection_candidates(
         candidates.append(
             CropCandidate(
                 crop_type,
-                producer_type,
                 detection.box,
-                "detected" if not fallback_used else f"fallback_{producer_type}",
+                "detected",
                 model_path=f"imgutils:{model_kind}",
                 conf=config["detection"].get("conf_threshold", ""),
                 class_id=detection.label,
                 score=round(detection.score, 4),
-                padding_x=params["left"],
-                padding_y=params["top"],
-                fallback_used=fallback_used,
-                fallback_reason=fallback_reason,
+                expand_left=params["left"],
+                expand_top=params["top"],
+                expand_right=params["right"],
+                expand_bottom=params["bottom"],
             )
         )
     return candidates
 
 
 def _random_candidates(
-    crop_type: str,
     width: int,
     height: int,
     config: dict[str, Any],
     rng: random.Random,
     body_detections: list[Detection],
-    fallback_used: bool,
-    fallback_reason: str,
 ) -> list[CropCandidate]:
     params = config["random_crop"]
     candidates = []
@@ -322,12 +307,9 @@ def _random_candidates(
             continue
         candidates.append(
             CropCandidate(
-                crop_type,
                 "random_crop",
                 box,
-                "random" if not fallback_used else "fallback_random_crop",
-                fallback_used=fallback_used,
-                fallback_reason=fallback_reason,
+                "random",
             )
         )
     return candidates
@@ -341,23 +323,25 @@ def _prepare_crop(
 ) -> PreparedCrop:
     image_width, image_height = image_size
     raw = _clamp_float_box(candidate.box, image_width, image_height)
-    min_size = int(config["crop"].get("min_crop_size", 32))
+    min_size = _crop_min_size(config)
     if not _valid_float_box(raw, min_size):
         raise ValueError("invalid_bbox")
 
-    if candidate.producer_type == "full":
+    if candidate.crop_type == "full":
+        raw_box = _cover_and_clamp_box(raw, image_width, image_height)
         output_size = _resize_full_by_area(image_width, image_height, config)
         return PreparedCrop(
-            _round_box(raw),
-            _round_box(raw),
-            _round_box(raw),
+            raw_box,
+            raw_box,
+            raw_box,
             "original",
             output_size,
             image_width / image_height,
-            "full_copy" if not candidate.fallback_used else "fallback_full",
+            _box_area(raw_box),
+            "full_resize",
         )
 
-    semantic = _expand_bbox(raw, _semantic_params(config, candidate.producer_type))
+    semantic = _expand_bbox(raw, _semantic_params(config, candidate.crop_type))
     semantic = _clamp_float_box(semantic, image_width, image_height)
     if not _valid_float_box(semantic, min_size):
         raise ValueError("too_small")
@@ -370,14 +354,18 @@ def _prepare_crop(
         adjusted = _shift_or_shrink_to_image(fitted, semantic, image_width, image_height, target_ratio)
         if adjusted is None:
             continue
-        output_size = _choose_output_size(ratio_name, rng)
+        raw_box = _cover_and_clamp_box(raw, image_width, image_height)
+        semantic_box = _cover_and_clamp_box(semantic, image_width, image_height)
+        final_box = _cover_and_clamp_box(adjusted, image_width, image_height)
+        output_size = _choose_output_size_for_crop(ratio_name, final_box, config, rng)
         return PreparedCrop(
-            _round_box(raw),
-            _round_box(semantic),
-            _round_box(adjusted),
+            raw_box,
+            semantic_box,
+            final_box,
             ratio_name,
             output_size,
             bbox_ratio,
+            _box_area(final_box),
             candidate.reason,
         )
     raise ValueError("fit_failed")
@@ -416,7 +404,7 @@ def _detect_halfbody(image: Image.Image, image_path: Path, config: dict[str, Any
     width, height = image.size
     detections: list[Detection] = []
     for person in body_detections:
-        x1, y1, x2, y2 = _clamp_box(_round_box(person.box), width, height)
+        x1, y1, x2, y2 = _cover_and_clamp_box(person.box, width, height)
         if x2 <= x1 or y2 <= y1:
             continue
         crop = image.crop((x1, y1, x2, y2))
@@ -433,7 +421,7 @@ def _imgutils_detect(image: Any, config: dict[str, Any], kind: str) -> list[Dete
     conf_threshold = float(params.get("conf_threshold", 0.35))
     iou_threshold = float(params.get("iou_threshold", 0.7))
     raw_results = _call_imgutils_detector(image, kind, level, version, conf_threshold, iou_threshold)
-    return [Detection(tuple(float(value) for value in box), float(score), label) for box, label, score in raw_results]
+    return [Detection((float(box[0]), float(box[1]), float(box[2]), float(box[3])), float(score), label) for box, label, score in raw_results]
 
 
 def _call_imgutils_detector(
@@ -464,19 +452,18 @@ def _needs_body_detection(config: dict[str, Any]) -> bool:
     return bool(
         enabled.get("body", True)
         or enabled.get("halfbody", True)
-        or enabled.get("face", True)
         or (enabled.get("random_crop", True) and config.get("random_crop", {}).get("avoid_body", False))
     )
 
 
 def _needs_face_detection(config: dict[str, Any]) -> bool:
     enabled = config.get("crop_types", {})
-    return bool(enabled.get("face", True) or enabled.get("halfbody", True) or enabled.get("body", True))
+    return bool(enabled.get("face", True))
 
 
 def _needs_halfbody_detection(config: dict[str, Any]) -> bool:
     enabled = config.get("crop_types", {})
-    return bool(enabled.get("halfbody", True) or enabled.get("face", True) or enabled.get("body", True))
+    return bool(enabled.get("halfbody", True))
 
 
 def _target_dir(output_dir: Path, crop_type: str) -> Path:
@@ -519,9 +506,16 @@ def _semantic_params(config: dict[str, Any], kind: str) -> dict[str, float | int
         "bottom": 1.0,
         "left": 1.0,
         "right": 1.0,
-        "min_size": int(config["crop"].get("min_crop_size", 32)),
+        "min_size": _crop_min_size(config),
         "max_count_per_image": 1,
     }
+
+
+def _crop_min_size(config: dict[str, Any]) -> int:
+    crop_config = config.get("crop", {})
+    if "min_bbox_size" in crop_config:
+        return int(crop_config.get("min_bbox_size", 32))
+    return int(crop_config.get("min_crop_size", 32))
 
 
 def _expand_bbox(box: tuple[float, float, float, float], params: dict[str, float | int]) -> tuple[float, float, float, float]:
@@ -562,8 +556,7 @@ def _weighted_ratio_order(
         choice = rng.choices(remaining, weights=weights, k=1)[0]
         ordered.append(choice)
         remaining.remove(choice)
-    nearest = sorted(names, key=lambda name: abs(math.log(RATIOS[name] / bbox_ratio)))
-    return ordered + [name for name in nearest if name not in ordered]
+    return ordered
 
 
 def _ratio_weight(name: str, bbox_ratio: float, config: dict[str, Any]) -> float:
@@ -573,7 +566,8 @@ def _ratio_weight(name: str, bbox_ratio: float, config: dict[str, Any]) -> float
     target_ratio = RATIOS[name]
     distance = abs(math.log(target_ratio / bbox_ratio))
     gaussian = math.exp(-((distance**2) / (2 * sigma**2)))
-    return max(float(base_weights.get(name, BASE_RATIO_WEIGHTS[name])) * gaussian, 0.01)
+    base_multiplier = math.sqrt(float(base_weights.get(name, BASE_RATIO_WEIGHTS[name])))
+    return max(base_multiplier * gaussian, 0.01)
 
 
 def _fit_bbox_to_ratio(box: tuple[float, float, float, float], target_ratio: float) -> tuple[float, float, float, float]:
@@ -627,11 +621,25 @@ def _shift_or_shrink_to_image(
     return adjusted if _contains(adjusted, semantic) else None
 
 
-def _choose_output_size(ratio_name: str, rng: random.Random) -> tuple[int, int]:
+def _choose_output_size_for_crop(
+    ratio_name: str,
+    final_box: tuple[int, int, int, int],
+    config: dict[str, Any],
+    rng: random.Random,
+) -> tuple[int, int]:
+    source_area = max(1, _box_area(final_box))
+    target_area = min(max(source_area, MIN_AREA), MAX_AREA)
     candidates = [(w, h) for w, h in OUTPUT_SIZE_PRESETS[ratio_name] if _area_is_valid(w * h)]
     if not candidates:
         raise ValueError(f"no_valid_output_size:{ratio_name}")
-    return rng.choice(candidates)
+    sigma = float(config.get("size_selection", {}).get("sigma", 0.35))
+    weights = []
+    for width, height in candidates:
+        output_area = width * height
+        distance = abs(math.log(output_area / target_area))
+        weight = math.exp(-((distance**2) / (2 * sigma**2)))
+        weights.append(max(weight, 0.01))
+    return rng.choices(candidates, weights=weights, k=1)[0]
 
 
 def _resize_full_by_area(width: int, height: int, config: dict[str, Any]) -> tuple[int, int]:
@@ -657,8 +665,13 @@ def _clamp_float_box(box: tuple[float, float, float, float], width: int, height:
     return (max(0.0, x1), max(0.0, y1), min(float(width), x2), min(float(height), y2))
 
 
-def _round_box(box: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
-    return tuple(round(value) for value in box)  # type: ignore[return-value]
+def _cover_box_as_int(box: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = box
+    return (math.floor(x1), math.floor(y1), math.ceil(x2), math.ceil(y2))
+
+
+def _cover_and_clamp_box(box: tuple[float, float, float, float], width: int, height: int) -> tuple[int, int, int, int]:
+    return _clamp_box(_cover_box_as_int(box), width, height)
 
 
 def _clamp_box(box: tuple[int, int, int, int], width: int, height: int) -> tuple[int, int, int, int]:
@@ -697,6 +710,10 @@ def _area_is_valid(area: int) -> bool:
     return MIN_AREA <= area <= MAX_AREA
 
 
+def _box_area(box: tuple[int, int, int, int]) -> int:
+    return max(0, box[2] - box[0]) * max(0, box[3] - box[1])
+
+
 def _crop_log_row(
     work_dir: Path,
     source: Path,
@@ -707,19 +724,22 @@ def _crop_log_row(
     status: str,
     reason: str,
 ) -> dict[str, object]:
-    raw = prepared.raw_box if prepared else _round_box(_clamp_float_box(candidate.box, source_size[0], source_size[1]))
+    raw = prepared.raw_box if prepared else _cover_and_clamp_box(candidate.box, source_size[0], source_size[1])
     semantic = prepared.semantic_box if prepared else (0, 0, 0, 0)
     final = prepared.final_box if prepared else raw
     output_size = prepared.output_size if prepared else (0, 0)
     selected_ratio = prepared.selected_ratio if prepared else ""
     bbox_ratio = round(prepared.bbox_ratio, 4) if prepared else ""
+    source_crop_area = prepared.source_crop_area if prepared else _box_area(final)
     output_area = output_size[0] * output_size[1]
+    output_image = ""
+    if isinstance(target, Path):
+        output_image = relative_to_or_absolute(target, work_dir)
     return {
         "source_image": relative_to_or_absolute(source, work_dir),
-        "output_image": relative_to_or_absolute(target, work_dir) if target else "",
+        "output_image": output_image,
         "episode_id": parse_episode_id(source),
         "crop_type": candidate.crop_type,
-        "producer_type": candidate.producer_type,
         "x1": final[0],
         "y1": final[1],
         "x2": final[2],
@@ -737,18 +757,17 @@ def _crop_log_row(
         "output_width": output_size[0],
         "output_height": output_size[1],
         "output_area": output_area,
-        "aspect_mode": selected_ratio,
+        "source_crop_area": source_crop_area,
         "bbox_ratio": bbox_ratio,
         "selected_ratio": selected_ratio,
-        "padding_x": candidate.padding_x,
-        "padding_y": candidate.padding_y,
+        "expand_left": candidate.expand_left,
+        "expand_top": candidate.expand_top,
+        "expand_right": candidate.expand_right,
+        "expand_bottom": candidate.expand_bottom,
         "model_path": candidate.model_path,
         "conf": candidate.conf,
         "class_id": candidate.class_id,
         "score": candidate.score,
-        "random_seed": "",
-        "fallback_used": candidate.fallback_used,
-        "fallback_reason": candidate.fallback_reason,
         "reason": reason,
         "status": status,
         "error": "" if status != "skipped" else reason,
