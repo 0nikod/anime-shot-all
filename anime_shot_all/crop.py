@@ -75,7 +75,13 @@ class CropCandidate:
     padding_y: float | str = ""
 
 
-def run_crop(work_dir: Path, config: dict[str, Any], input_dir: Path | None = None, output_dir: Path | None = None) -> tuple[int, Path]:
+def run_crop(
+    work_dir: Path,
+    config: dict[str, Any],
+    input_dir: Path | None = None,
+    output_dir: Path | None = None,
+    stop_state: dict[str, Any] | None = None,
+) -> tuple[int, Path]:
     params = config["crop"]
     input_dir = input_dir or resolve_work_path(work_dir, params.get("input_dir", "frames_dedup"))
     output_dir = output_dir or resolve_work_path(work_dir, params.get("output_dir", "crops"))
@@ -85,6 +91,8 @@ def run_crop(work_dir: Path, config: dict[str, Any], input_dir: Path | None = No
     rows: list[dict[str, object]] = []
     saved = 0
     for image_path in collect_images(input_dir):
+        if stop_state and stop_state.get("stop"):
+            break
         image_saved, image_rows = crop_one_image(work_dir, config, image_path, output_dir, rng)
         saved += image_saved
         rows.extend(image_rows)

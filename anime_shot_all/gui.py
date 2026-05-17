@@ -16,15 +16,6 @@ from .config import (
     write_yaml,
 )
 from .crop import run_crop
-from .dedup import (
-    analyze_duplicates,
-    export_dedup_results,
-    group_gallery_items,
-    keep_all_in_group,
-    load_dedup_state,
-    save_dedup_state,
-    update_group_decision,
-)
 from .extract import extract_frames_for_videos
 from .ignore_ranges import (
     export_csv,
@@ -45,27 +36,20 @@ VIDEO_HEADERS = ["episode_id", "video_path", "video_name", "duration_sec", "fps"
 ASPECT_OPTIONS = ["original", "square", "portrait_2_3", "portrait_3_4", "portrait_9_16", "landscape_16_9", "landscape_4_3", "random"]
 
 PARAM_SCHEMA: dict[str, dict[str, Any]] = {
-    "extract_output": {"component": "textbox", "label": "输出 frames_raw 文件夹", "info": "PNG 截帧保存目录。"},
+    "extract_output": {"component": "textbox", "label": "输出 frames_raw 文件夹", "info": "PNG 截帧保存目录（已包含去重输出）。"},
     "interval": {"component": "number", "label": "interval", "value": 0.25, "info": "采样间隔秒数；越小检查越频繁。"},
-    "diff_threshold": {"component": "number", "label": "diff_threshold", "value": 5, "info": "画面差异阈值；越低保存越多。"},
-    "max_gap": {"component": "number", "label": "max_gap", "value": 2.0, "info": "最长强制保存间隔秒数。"},
+    "keyframe_only": {"component": "checkbox", "label": "截关键帧", "value": False, "info": "关键帧模式会忽略 interval / 去重分组。"},
     "png_compression": {"component": "slider", "label": "png_compression", "value": 3, "minimum": 0, "maximum": 9, "step": 1, "info": "PNG 压缩等级；越高越慢。"},
     "min_width": {"component": "number", "label": "min_width", "value": 0, "info": "输出最小宽度；0 表示不放大。"},
     "crop_bottom": {"component": "number", "label": "crop_bottom", "value": 0, "info": "从底部裁掉像素，可避开硬字幕。"},
-    "resize_width_for_diff": {"component": "number", "label": "resize_width_for_diff", "value": 320, "info": "差异计算缩放宽度；越小越快。"},
-    "scene_diff_method": {"component": "dropdown", "label": "scene_diff_method", "value": "gray_mean_absdiff", "choices": ["gray_mean_absdiff"], "info": "当前支持灰度平均绝对差。"},
-    "reset_diff_after_ignore": {"component": "checkbox", "label": "reset_diff_after_ignore", "value": True, "info": "离开忽略区间后重置 diff 基准。"},
-    "dedup_input": {"component": "textbox", "label": "输入图片目录", "info": "通常为 frames_raw。"},
-    "dedup_output": {"component": "textbox", "label": "输出 frames_dedup 目录", "info": "人工确认后复制保留图片。"},
-    "dedup_scope": {"component": "dropdown", "label": "dedup_scope", "value": "per_episode", "choices": ["per_episode", "global", "custom"], "info": "per_episode 更保守；global 更激进。"},
-    "episode_filter": {"component": "textbox", "label": "episode_filter", "value": "all", "info": "all 或 ep01 等单集编号。"},
-    "hash_threshold": {"component": "number", "label": "hash_threshold", "value": 5, "info": "pHash 距离阈值；越大越激进。"},
-    "hash_size": {"component": "number", "label": "hash_size", "value": 8, "info": "pHash 尺寸；越大越细。"},
-    "hash_crop": {"component": "dropdown", "label": "hash_crop", "value": "center", "choices": ["center", "full"], "info": "center 更关注主体区域。"},
-    "hash_resize_width": {"component": "number", "label": "hash_resize_width", "value": 256, "info": "hash 前缩放宽度；越小越快。"},
-    "num_workers": {"component": "number", "label": "num_workers", "value": -1, "info": "-1 表示自动选择。"},
-    "export_rejected": {"component": "checkbox", "label": "export_rejected_duplicates", "value": True, "info": "复制被去重图片便于复查。"},
-    "crop_input": {"component": "textbox", "label": "输入图片文件夹", "info": "通常为 frames_dedup。"},
+    "phash_threshold": {"component": "number", "label": "phash_threshold", "value": 5, "info": "pHash 距离阈值；越大越激进。"},
+    "phash_size": {"component": "number", "label": "phash_size", "value": 8, "info": "pHash 尺寸；越大越细。"},
+    "phash_crop": {"component": "dropdown", "label": "phash_crop", "value": "center", "choices": ["center", "full"], "info": "center 更关注主体区域。"},
+    "phash_resize_width": {"component": "number", "label": "phash_resize_width", "value": 256, "info": "hash 前缩放宽度；越小越快。"},
+    "group_seconds_per_keep": {"component": "number", "label": "group_seconds_per_keep", "value": 5.0, "info": "相似组每多少秒保留一张。"},
+    "group_max_duration": {"component": "number", "label": "group_max_duration", "value": 60.0, "info": "相似组强制切段时长上限（秒）。"},
+    "extract_random_seed": {"component": "number", "label": "extract_random_seed", "value": 42, "info": "截帧分组随机抽取的随机种子。"},
+    "crop_input": {"component": "textbox", "label": "输入图片文件夹", "info": "通常为 frames_raw。"},
     "crop_output": {"component": "textbox", "label": "输出 crops 文件夹", "info": "最终 PNG 裁剪输出目录。"},
     "crop_mode": {"component": "checkbox_group", "label": "输出类型", "choices": ["full", "hard_split", "face", "body", "halfbody", "background", "random_crop"], "value": ["full", "hard_split", "face", "body", "halfbody", "background", "random_crop"], "info": "未勾选的类型不会输出，也不会触发对应检测。"},
     "output_strategy": {"component": "dropdown", "label": "输出策略", "value": "fixed", "choices": ["fixed", "random_weighted"], "info": "fixed 全部尝试；random_weighted 按权重抽样。"},
@@ -146,14 +130,15 @@ def build_app() -> gr.Blocks:
     with gr.Blocks(title="Anime Shot All") as app:
         config_state = gr.State({})
         video_state = gr.State([])
-        dedup_state = gr.State({"config": {}, "groups": [], "unique_images": []})
+        extract_stop_state = gr.State({"stop": False})
+        crop_stop_state = gr.State({"stop": False})
         gr.Markdown("# 动漫图像训练数据采集与裁剪工具")
 
         with gr.Tab("工作目录 / 视频 / 忽略区间 / 参数"):
             with gr.Row():
                 work_dir = gr.Textbox(label="工作目录 work_dir", value="./work_dir", placeholder="./work_dir")
                 open_work_dir = gr.Button("初始化 / 打开工作目录", variant="primary")
-            video_dir = gr.Textbox(label="视频文件夹 video_dir", value="./video_dir")
+            video_dir = gr.Textbox(label="视频文件夹 video_dir", value="./video_dir", info="自动按配置中的视频扩展名过滤。")
             with gr.Row():
                 scan_video_btn = gr.Button("扫描视频")
                 load_params_btn = gr.Button("加载 params.yaml")
@@ -179,76 +164,47 @@ def build_app() -> gr.Blocks:
 
         with gr.Tab("截帧"):
             extract_output = _param_component("extract_output")
+            video_selection = gr.CheckboxGroup(label="选择要截帧的视频", choices=[])
             with gr.Accordion("截帧参数", open=True):
                 extract_params = _param_controls(
                     [
                         "interval",
-                        "diff_threshold",
-                        "max_gap",
+                        "keyframe_only",
                         "png_compression",
                         "min_width",
                         "crop_bottom",
-                        "resize_width_for_diff",
-                        "scene_diff_method",
-                        "reset_diff_after_ignore",
                     ],
                     columns=3,
                 )
                 interval = extract_params["interval"]
-                diff_threshold = extract_params["diff_threshold"]
-                max_gap = extract_params["max_gap"]
+                keyframe_only = extract_params["keyframe_only"]
                 png_compression = extract_params["png_compression"]
                 min_width = extract_params["min_width"]
                 crop_bottom = extract_params["crop_bottom"]
-                resize_width_for_diff = extract_params["resize_width_for_diff"]
-                scene_diff_method = extract_params["scene_diff_method"]
-                reset_diff_after_ignore = extract_params["reset_diff_after_ignore"]
-            extract_btn = gr.Button("开始截帧", variant="primary")
-            extract_log = gr.Textbox(label="日志窗口", lines=8)
-
-        with gr.Tab("去重"):
-            with gr.Row():
-                dedup_input = _param_component("dedup_input")
-                dedup_output = _param_component("dedup_output")
-            with gr.Accordion("去重参数", open=True):
-                dedup_params = _param_controls(
+            with gr.Accordion("pHash 分组与随机保留", open=False):
+                phash_params = _param_controls(
                     [
-                        "dedup_scope",
-                        "episode_filter",
-                        "hash_threshold",
-                        "hash_size",
-                        "hash_crop",
-                        "hash_resize_width",
-                        "num_workers",
-                        "export_rejected",
+                        "phash_threshold",
+                        "phash_size",
+                        "phash_crop",
+                        "phash_resize_width",
+                        "group_seconds_per_keep",
+                        "group_max_duration",
+                        "extract_random_seed",
                     ],
-                    columns=4,
+                    columns=3,
                 )
-                dedup_scope = dedup_params["dedup_scope"]
-                episode_filter = dedup_params["episode_filter"]
-                hash_threshold = dedup_params["hash_threshold"]
-                hash_size = dedup_params["hash_size"]
-                hash_crop = dedup_params["hash_crop"]
-                hash_resize_width = dedup_params["hash_resize_width"]
-                num_workers = dedup_params["num_workers"]
-                export_rejected = dedup_params["export_rejected"]
+                phash_threshold = phash_params["phash_threshold"]
+                phash_size = phash_params["phash_size"]
+                phash_crop = phash_params["phash_crop"]
+                phash_resize_width = phash_params["phash_resize_width"]
+                group_seconds_per_keep = phash_params["group_seconds_per_keep"]
+                group_max_duration = phash_params["group_max_duration"]
+                extract_random_seed = phash_params["extract_random_seed"]
             with gr.Row():
-                analyze_btn = gr.Button("分析重复", variant="primary")
-                load_dedup_btn = gr.Button("加载 dedup_state")
-                save_dedup_btn = gr.Button("保存 dedup_state")
-            dedup_info = gr.Textbox(label="当前去重任务信息", lines=4)
-            with gr.Row():
-                group_dropdown = gr.Dropdown(label="group_id", choices=[])
-                prev_group_btn = gr.Button("上一组")
-                next_group_btn = gr.Button("下一组")
-            group_gallery = gr.Gallery(label="当前重复组", columns=4, height=360)
-            keep_choices = gr.CheckboxGroup(label="选择本组要保留的图片", choices=[])
-            with gr.Row():
-                save_group_btn = gr.Button("保存本组决策")
-                keep_all_btn = gr.Button("本组全部保留")
-                keep_selected_btn = gr.Button("本组只保留选中")
-                export_dedup_btn = gr.Button("确认去重并导出", variant="primary")
-            dedup_log = gr.Textbox(label="日志窗口", lines=8)
+                extract_btn = gr.Button("开始截帧", variant="primary")
+                extract_stop_btn = gr.Button("停止截帧")
+            extract_log = gr.Textbox(label="日志窗口", lines=8)
 
         with gr.Tab("裁剪"):
             with gr.Row():
@@ -338,7 +294,9 @@ def build_app() -> gr.Blocks:
                 max_side = crop_size_params["max_side"]
                 crop_png_compression = crop_size_params["crop_png_compression"]
                 target_crops_per_image = crop_size_params["target_crops_per_image"]
-            crop_btn = gr.Button("开始裁剪", variant="primary")
+            with gr.Row():
+                crop_btn = gr.Button("开始裁剪", variant="primary")
+                crop_stop_btn = gr.Button("停止裁剪")
             crop_log = gr.Textbox(label="日志窗口", lines=8)
 
         with gr.Tab("日志 / 输出"):
@@ -351,24 +309,17 @@ def build_app() -> gr.Blocks:
             video_dir,
             extract_output,
             interval,
-            diff_threshold,
-            max_gap,
+            keyframe_only,
             png_compression,
             min_width,
             crop_bottom,
-            resize_width_for_diff,
-            scene_diff_method,
-            reset_diff_after_ignore,
-            dedup_input,
-            dedup_output,
-            dedup_scope,
-            episode_filter,
-            hash_threshold,
-            hash_size,
-            hash_crop,
-            hash_resize_width,
-            num_workers,
-            export_rejected,
+            phash_threshold,
+            phash_size,
+            phash_crop,
+            phash_resize_width,
+            group_seconds_per_keep,
+            group_max_duration,
+            extract_random_seed,
             crop_input,
             crop_output,
             crop_mode,
@@ -410,7 +361,7 @@ def build_app() -> gr.Blocks:
         open_work_dir.click(
             _open_project,
             inputs=[work_dir],
-            outputs=[config_state, video_dir, extract_output, dedup_input, dedup_output, crop_input, crop_output, ignore_table, setup_log],
+            outputs=[config_state, video_dir, extract_output, crop_input, crop_output, ignore_table, setup_log],
         )
         load_params_btn.click(_load_params, inputs=[work_dir], outputs=[config_state, setup_log, *param_inputs])
         save_params_btn.click(_save_params_from_gui, inputs=[work_dir, config_state, *param_inputs], outputs=[config_state, setup_log])
@@ -418,29 +369,25 @@ def build_app() -> gr.Blocks:
         import_yaml_btn.click(_import_yaml, inputs=[work_dir, yaml_import], outputs=[config_state, setup_log, *param_inputs])
         export_yaml_btn.click(_export_yaml, inputs=[work_dir, config_state, export_yaml_path], outputs=[setup_log])
 
-        scan_video_btn.click(_scan_videos, inputs=[work_dir, video_dir, config_state], outputs=[video_state, video_table, setup_log, episode_filter])
+        scan_video_btn.click(
+            _scan_videos,
+            inputs=[work_dir, video_dir, config_state],
+            outputs=[video_state, video_table, setup_log, video_selection],
+        )
         load_ignore_btn.click(_load_ignore, inputs=[work_dir], outputs=[ignore_table, setup_log])
         save_ignore_btn.click(_save_ignore, inputs=[work_dir, ignore_table, video_state], outputs=[setup_log])
         validate_ignore_btn.click(_validate_ignore, inputs=[work_dir, ignore_table, video_state, config_state], outputs=[ignore_table, setup_log])
         import_ignore_csv_btn.click(_import_ignore_csv, inputs=[ignore_csv_file], outputs=[ignore_table, setup_log])
         export_ignore_csv_btn.click(_export_ignore_csv, inputs=[work_dir, ignore_table, export_ignore_csv_path], outputs=[setup_log])
 
-        extract_btn.click(_run_extract, inputs=[work_dir, config_state, video_state, *param_inputs], outputs=[config_state, extract_log])
-        analyze_btn.click(
-            _analyze_dedup,
-            inputs=[work_dir, config_state, *param_inputs],
-            outputs=[config_state, dedup_state, group_dropdown, dedup_info, group_gallery, keep_choices, dedup_log],
+        extract_btn.click(
+            _run_extract,
+            inputs=[work_dir, config_state, video_state, video_selection, extract_stop_state, *param_inputs],
+            outputs=[config_state, extract_log, extract_stop_state],
         )
-        load_dedup_btn.click(_load_dedup, inputs=[work_dir], outputs=[dedup_state, group_dropdown, dedup_info, group_gallery, keep_choices, dedup_log])
-        save_dedup_btn.click(_save_dedup, inputs=[work_dir, dedup_state], outputs=[dedup_log])
-        group_dropdown.change(_show_group, inputs=[work_dir, dedup_state, group_dropdown], outputs=[group_gallery, keep_choices])
-        prev_group_btn.click(_move_group, inputs=[work_dir, dedup_state, group_dropdown, gr.State(-1)], outputs=[group_dropdown, group_gallery, keep_choices])
-        next_group_btn.click(_move_group, inputs=[work_dir, dedup_state, group_dropdown, gr.State(1)], outputs=[group_dropdown, group_gallery, keep_choices])
-        save_group_btn.click(_save_group, inputs=[work_dir, dedup_state, group_dropdown, keep_choices], outputs=[dedup_state, group_gallery, keep_choices, dedup_log])
-        keep_selected_btn.click(_save_group, inputs=[work_dir, dedup_state, group_dropdown, keep_choices], outputs=[dedup_state, group_gallery, keep_choices, dedup_log])
-        keep_all_btn.click(_keep_all, inputs=[work_dir, dedup_state, group_dropdown], outputs=[dedup_state, group_gallery, keep_choices, dedup_log])
-        export_dedup_btn.click(_export_dedup, inputs=[work_dir, config_state, dedup_state, *param_inputs], outputs=[config_state, dedup_log])
-        crop_btn.click(_run_crop_gui, inputs=[work_dir, config_state, *param_inputs], outputs=[config_state, crop_log])
+        extract_stop_btn.click(_request_stop, inputs=[extract_stop_state], outputs=[extract_stop_state, extract_log])
+        crop_btn.click(_run_crop_gui, inputs=[work_dir, config_state, crop_stop_state, *param_inputs], outputs=[config_state, crop_log, crop_stop_state])
+        crop_stop_btn.click(_request_stop, inputs=[crop_stop_state], outputs=[crop_stop_state, crop_log])
         refresh_stats_btn.click(_refresh_stats, inputs=[work_dir, config_state], outputs=[stats_output, paths_output, recent_logs])
 
     return app
@@ -454,8 +401,6 @@ def _open_project(work_dir: str):
         config,
         str(resolve_work_path(root, config["project"].get("video_dir", "videos"))),
         str(resolve_work_path(root, config["paths"]["frames_raw"])),
-        str(resolve_work_path(root, config["paths"]["frames_raw"])),
-        str(resolve_work_path(root, config["paths"]["frames_dedup"])),
         str(resolve_work_path(root, config["crop"]["input_dir"])),
         str(resolve_work_path(root, config["crop"]["output_dir"])),
         ignore_rows,
@@ -501,7 +446,8 @@ def _export_yaml(work_dir: str, config: dict[str, Any], export_path: str):
 def _scan_videos(work_dir: str, video_dir: str, config: dict[str, Any]):
     root = Path(work_dir).expanduser().resolve()
     videos = scan_videos(resolve_work_path(root, video_dir), root, config["project"]["supported_video_ext"])
-    return videos_as_dicts(videos), videos_to_rows(videos), f"scanned {len(videos)} videos", "all"
+    choices = [item.video_name for item in videos]
+    return videos_as_dicts(videos), videos_to_rows(videos), f"scanned {len(videos)} videos", gr.update(choices=choices, value=choices)
 
 
 def _load_ignore(work_dir: str):
@@ -537,81 +483,38 @@ def _export_ignore_csv(work_dir: str, rows: list[list[Any]], export_path: str):
     return f"exported {path}"
 
 
-def _run_extract(work_dir: str, config: dict[str, Any], videos: list[dict[str, Any]], *values: Any):
+def _run_extract(
+    work_dir: str,
+    config: dict[str, Any],
+    videos: list[dict[str, Any]],
+    selected: list[str],
+    stop_state: dict[str, Any],
+    *values: Any,
+):
     updated = _apply_gui_values(config, values)
+    stop_state = dict(stop_state or {})
+    stop_state["stop"] = False
     root = Path(work_dir).expanduser().resolve()
-    video_objs = [VideoInfo(**item) for item in videos]
-    saved, log_path, messages = extract_frames_for_videos(root, updated, video_objs)
-    return updated, "\n".join([*messages, f"saved total: {saved}", f"log: {log_path}"])
+    selected_set = set(selected or [])
+    video_objs = [VideoInfo(**item) for item in videos if not selected_set or item.get("video_name") in selected_set]
+    saved, log_path, messages = extract_frames_for_videos(root, updated, video_objs, stop_state=stop_state)
+    return updated, "\n".join([*messages, f"saved total: {saved}", f"log: {log_path}"]), stop_state
 
 
-def _analyze_dedup(work_dir: str, config: dict[str, Any], *values: Any):
+
+
+def _run_crop_gui(work_dir: str, config: dict[str, Any], stop_state: dict[str, Any], *values: Any):
     updated = _apply_gui_values(config, values)
-    root = Path(work_dir).expanduser().resolve()
-    state, path = analyze_duplicates(root, updated, resolve_work_path(root, updated["dedup"]["input_dir"]))
-    groups = [group["group_id"] for group in state.get("groups", [])]
-    group_id = groups[0] if groups else None
-    gallery, keep = group_gallery_items(root, state, group_id) if group_id else ([], [])
-    info = f"groups: {len(groups)}\nunique: {len(state.get('unique_images', []))}\nstate: {path}"
-    return updated, state, gr.update(choices=groups, value=group_id), info, gallery, gr.update(choices=keep or [], value=keep), f"analyzed {path}"
+    stop_state = dict(stop_state or {})
+    stop_state["stop"] = False
+    saved, log_path = run_crop(Path(work_dir).expanduser().resolve(), updated, stop_state=stop_state)
+    return updated, f"saved crops: {saved}\nlog: {log_path}", stop_state
 
 
-def _load_dedup(work_dir: str):
-    root = Path(work_dir).expanduser().resolve()
-    state = load_dedup_state(root)
-    groups = [group["group_id"] for group in state.get("groups", [])]
-    group_id = groups[0] if groups else None
-    gallery, keep = group_gallery_items(root, state, group_id) if group_id else ([], [])
-    info = f"groups: {len(groups)}\nunique: {len(state.get('unique_images', []))}"
-    return state, gr.update(choices=groups, value=group_id), info, gallery, gr.update(choices=keep, value=keep), "loaded dedup_state.json"
-
-
-def _save_dedup(work_dir: str, state: dict[str, Any]):
-    path = save_dedup_state(Path(work_dir).expanduser().resolve(), state)
-    return f"saved {path}"
-
-
-def _show_group(work_dir: str, state: dict[str, Any], group_id: str):
-    gallery, keep = group_gallery_items(Path(work_dir).expanduser().resolve(), state, group_id)
-    choices = [item[1].split(" | ")[0] for item in gallery]
-    path_choices = _group_paths(state, group_id)
-    return gallery, gr.update(choices=path_choices, value=keep)
-
-
-def _move_group(work_dir: str, state: dict[str, Any], current: str, delta: int):
-    groups = [group["group_id"] for group in state.get("groups", [])]
-    if not groups:
-        return None, [], gr.update(choices=[], value=[])
-    index = groups.index(current) if current in groups else 0
-    next_id = groups[(index + delta) % len(groups)]
-    gallery, keep = group_gallery_items(Path(work_dir).expanduser().resolve(), state, next_id)
-    return next_id, gallery, gr.update(choices=_group_paths(state, next_id), value=keep)
-
-
-def _save_group(work_dir: str, state: dict[str, Any], group_id: str, keep: list[str]):
-    state = update_group_decision(state, group_id, keep or [])
-    save_dedup_state(Path(work_dir).expanduser().resolve(), state)
-    gallery, values = group_gallery_items(Path(work_dir).expanduser().resolve(), state, group_id)
-    return state, gallery, gr.update(choices=_group_paths(state, group_id), value=values), f"saved decision for {group_id}"
-
-
-def _keep_all(work_dir: str, state: dict[str, Any], group_id: str):
-    state = keep_all_in_group(state, group_id)
-    save_dedup_state(Path(work_dir).expanduser().resolve(), state)
-    gallery, values = group_gallery_items(Path(work_dir).expanduser().resolve(), state, group_id)
-    return state, gallery, gr.update(choices=_group_paths(state, group_id), value=values), f"kept all in {group_id}"
-
-
-def _export_dedup(work_dir: str, config: dict[str, Any], state: dict[str, Any], *values: Any):
-    updated = _apply_gui_values(config, values)
-    kept, rejected, log_path = export_dedup_results(Path(work_dir).expanduser().resolve(), updated, state)
-    return updated, f"kept: {kept}\nrejected copies: {rejected}\nlog: {log_path}"
-
-
-def _run_crop_gui(work_dir: str, config: dict[str, Any], *values: Any):
-    updated = _apply_gui_values(config, values)
-    saved, log_path = run_crop(Path(work_dir).expanduser().resolve(), updated)
-    return updated, f"saved crops: {saved}\nlog: {log_path}"
+def _request_stop(stop_state: dict[str, Any]):
+    updated = dict(stop_state or {})
+    updated["stop"] = True
+    return updated, "stop requested"
 
 
 def _refresh_stats(work_dir: str, config: dict[str, Any]):
@@ -621,10 +524,9 @@ def _refresh_stats(work_dir: str, config: dict[str, Any]):
         f"work_dir: {root}",
         f"params: {root / 'configs' / 'params.yaml'}",
         f"ignore_ranges: {root / 'states' / 'ignore_ranges.json'}",
-        f"dedup_state: {root / 'states' / 'dedup_state.json'}",
     ]
     logs = []
-    for key in ["extract_log", "dedup_log", "crop_log"]:
+    for key in ["extract_log", "crop_log"]:
         log_path = resolve_work_path(root, config["logging"][key])
         text = recent_log_text(log_path)
         if text:
@@ -639,24 +541,17 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
         video_dir,
         extract_output,
         interval,
-        diff_threshold,
-        max_gap,
+        keyframe_only,
         png_compression,
         min_width,
         crop_bottom,
-        resize_width_for_diff,
-        scene_diff_method,
-        reset_diff_after_ignore,
-        dedup_input,
-        dedup_output,
-        dedup_scope,
-        episode_filter,
-        hash_threshold,
-        hash_size,
-        hash_crop,
-        hash_resize_width,
-        num_workers,
-        export_rejected,
+        phash_threshold,
+        phash_size,
+        phash_crop,
+        phash_resize_width,
+        group_seconds_per_keep,
+        group_max_duration,
+        extract_random_seed,
         crop_input,
         crop_output,
         crop_mode,
@@ -697,31 +592,20 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
     root = Path(cfg["project"]["work_dir"]).expanduser().resolve()
     cfg["project"]["video_dir"] = relative_path_value(video_dir, root)
     cfg["paths"]["frames_raw"] = relative_path_value(extract_output, root)
-    cfg["paths"]["frames_dedup"] = relative_path_value(dedup_output, root)
     cfg["extract"].update(
         {
             "interval": float(interval),
-            "diff_threshold": float(diff_threshold),
-            "max_gap": float(max_gap),
+            "keyframe_only": bool(keyframe_only),
             "png_compression": int(png_compression),
             "min_width": int(min_width),
             "crop_bottom": int(crop_bottom),
-            "resize_width_for_diff": int(resize_width_for_diff),
-            "scene_diff_method": scene_diff_method,
-            "reset_diff_after_ignore": bool(reset_diff_after_ignore),
-        }
-    )
-    cfg["dedup"].update(
-        {
-            "input_dir": relative_path_value(dedup_input, root),
-            "dedup_scope": dedup_scope,
-            "episode_filter": episode_filter,
-            "hash_threshold": int(hash_threshold),
-            "hash_size": int(hash_size),
-            "hash_crop": hash_crop,
-            "hash_resize_width": int(hash_resize_width),
-            "num_workers": int(num_workers),
-            "export_rejected_duplicates": bool(export_rejected),
+            "phash_threshold": int(phash_threshold),
+            "phash_size": int(phash_size),
+            "phash_crop": phash_crop,
+            "phash_resize_width": int(phash_resize_width),
+            "group_seconds_per_keep": float(group_seconds_per_keep),
+            "group_max_duration": float(group_max_duration),
+            "extract_random_seed": int(extract_random_seed),
         }
     )
     cfg["crop"].update(
@@ -782,24 +666,17 @@ def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
         config["project"].get("video_dir", "videos"),
         config["paths"]["frames_raw"],
         config["extract"]["interval"],
-        config["extract"]["diff_threshold"],
-        config["extract"]["max_gap"],
+        config["extract"].get("keyframe_only", False),
         config["extract"]["png_compression"],
         config["extract"]["min_width"],
         config["extract"]["crop_bottom"],
-        config["extract"]["resize_width_for_diff"],
-        config["extract"]["scene_diff_method"],
-        config["extract"]["reset_diff_after_ignore"],
-        config["dedup"].get("input_dir", config["paths"]["frames_raw"]),
-        config["paths"]["frames_dedup"],
-        config["dedup"]["dedup_scope"],
-        config["dedup"]["episode_filter"],
-        config["dedup"]["hash_threshold"],
-        config["dedup"]["hash_size"],
-        config["dedup"]["hash_crop"],
-        config["dedup"]["hash_resize_width"],
-        config["dedup"]["num_workers"],
-        config["dedup"]["export_rejected_duplicates"],
+        config["extract"].get("phash_threshold", 5),
+        config["extract"].get("phash_size", 8),
+        config["extract"].get("phash_crop", "center"),
+        config["extract"].get("phash_resize_width", 256),
+        config["extract"].get("group_seconds_per_keep", 5.0),
+        config["extract"].get("group_max_duration", 60.0),
+        config["extract"].get("extract_random_seed", 42),
         config["crop"]["input_dir"],
         config["crop"]["output_dir"],
         enabled_types,
@@ -837,13 +714,6 @@ def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
         config["crop"]["png_compression"],
         config["crop"]["target_crops_per_image"],
     )
-
-
-def _group_paths(state: dict[str, Any], group_id: str) -> list[str]:
-    for group in state.get("groups", []):
-        if group.get("group_id") == group_id:
-            return [item["path"] for item in group.get("images", [])]
-    return []
 
 
 def _deep_copy_config(config: dict[str, Any]) -> dict[str, Any]:

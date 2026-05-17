@@ -28,9 +28,7 @@ uv run anime-shot-all --port 7861
 → 选择或填写 video_dir
 → 扫描视频
 → 配置并保存 ignore_ranges
-→ 截帧
-→ 分析重复并人工确认
-→ 导出去重图片
+→ 截帧（内置 pHash 分组随机保留）
 → 裁剪输出 PNG
 ```
 
@@ -41,19 +39,15 @@ uv run anime-shot-all --port 7861
 ```text
 work_dir/
   frames_raw/
-  frames_dedup/
-  rejected_duplicates/
   crops/
   configs/
     default.yaml
     params.yaml
   logs/
     extract_log.csv
-    dedup_log.csv
     crop_log.csv
   states/
     ignore_ranges.json
-    dedup_state.json
 
 video_dir/
   *.mp4 / *.mkv / ...
@@ -61,9 +55,9 @@ video_dir/
 
 ## 当前边界
 
-- `ignore_ranges` 只用于截帧阶段跳过时间段，不参与去重或裁剪分组。
+- `ignore_ranges` 只用于截帧阶段跳过时间段，不参与裁剪分组。
 - 不实现 OP / ED 自动识别、单独目录、单独去重或单独裁剪。
-- 去重采用 pHash，算法只生成建议，最终结果以人工确认后的 `dedup_state.json` 为准。
+- 截帧支持关键帧模式（此时忽略 interval / max_gap / 去重分组）。
 - 语义裁剪使用 `dghs-imgutils` 的 face / person / halfbody 检测，不再由本工具直接管理检测模型权重。
 - 所有阶段都采用复制或生成新文件，不删除源视频或源图片。
 

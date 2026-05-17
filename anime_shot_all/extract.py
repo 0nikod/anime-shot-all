@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import json
+import math
+import random
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import cv2
+import imagehash
 import numpy as np
+from PIL import Image
 
 from .config import resolve_work_path
 from .files import relative_to_or_absolute
@@ -39,6 +46,7 @@ def extract_frames_for_videos(
     config: dict[str, Any],
     videos: list[VideoInfo],
     output_dir: Path | None = None,
+    stop_state: dict[str, Any] | None = None,
 ) -> tuple[int, Path, list[str]]:
     """Extract frames for all videos and write one combined CSV log."""
 
@@ -50,10 +58,20 @@ def extract_frames_for_videos(
     messages: list[str] = []
     saved_total = 0
     for video in videos:
-        saved, video_rows = extract_frames_for_video(work_dir, config, video, ignore_state, output_dir)
+        saved, video_rows = extract_frames_for_video(
+            work_dir,
+            config,
+            video,
+            ignore_state,
+            output_dir,
+            stop_state=stop_state,
+        )
         saved_total += saved
         rows.extend(video_rows)
         messages.append(f"{video.episode_id}: saved {saved} frames")
+        if stop_state and stop_state.get("stop"):
+            messages.append("stopped by user")
+            break
     write_csv(log_path, EXTRACT_LOG_FIELDS, rows)
     return saved_total, log_path, messages
 
@@ -64,6 +82,7 @@ def extract_frames_for_video(
     video: VideoInfo,
     ignore_state: dict[str, Any],
     output_dir: Path,
+    stop_state: dict[str, Any] | None = None,
 ) -> tuple[int, list[dict[str, object]]]:
     params = config["extract"]
     video_path = resolve_work_path(work_dir, video.video_path)
@@ -71,72 +90,50 @@ def extract_frames_for_video(
     if not cap.isOpened():
         return 0, [_error_row(video, f"cannot open video: {video_path}")]
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or video.fps or 24.0
-    frame_step = max(1, int(round(float(params["interval"]) * fps)))
     png_compression = int(params["png_compression"])
     ranges = active_ranges_for_episode(ignore_state, video.episode_id)
+    keyframe_only = bool(params.get("keyframe_only", False))
+    phash_threshold = int(params.get("phash_threshold", 5))
+    group_seconds_per_keep = float(params.get("group_seconds_per_keep", 5.0))
+    group_max_duration = float(params.get("group_max_duration", 60.0))
+    rng = random.Random(int(params.get("extract_random_seed", 42)))
 
     rows: list[dict[str, object]] = []
     saved_count = 0
-    previous_diff_frame: np.ndarray | None = None
-    previous_saved_timestamp: float | None = None
-    was_ignored = False
-    first_valid = True
+    group_frames: list[_PendingFrame] = []
+    group_start_ts: float | None = None
+    last_group_hash: imagehash.ImageHash | None = None
+    group_index = 0
 
-    frame_index = 0
-    while True:
-        ok = cap.grab()
-        if not ok:
-            break
-        if frame_index % frame_step != 0:
-            frame_index += 1
-            continue
-        ok, frame = cap.retrieve()
-        if not ok:
-            rows.append(_base_row(video, frame_index, frame_index / fps, status="error", error="cannot retrieve frame"))
-            frame_index += 1
-            continue
-        timestamp = frame_index / fps
-        ignored = match_ignore(timestamp, ranges)
-        if ignored:
-            was_ignored = True
-            rows.append(
-                _base_row(
-                    video,
-                    frame_index,
-                    timestamp,
-                    ignored=True,
-                    ignore_label=ignored.get("label", ""),
-                    ignore_start=ignored.get("start", ""),
-                    ignore_end=ignored.get("end", ""),
-                    status="skipped_ignore",
+    if keyframe_only:
+        # keyframe mode: interval/max_gap/pHash dedup are ignored.
+        keyframes = _probe_keyframe_timestamps(video_path)
+        if not keyframes:
+            rows.append(_error_row(video, f"no keyframes found: {video_path}"))
+        for frame_index, timestamp in keyframes:
+            if stop_state and stop_state.get("stop"):
+                break
+            ignored = match_ignore(timestamp, ranges)
+            if ignored:
+                rows.append(
+                    _base_row(
+                        video,
+                        frame_index,
+                        timestamp,
+                        ignored=True,
+                        ignore_label=ignored.get("label", ""),
+                        ignore_start=ignored.get("start", ""),
+                        ignore_end=ignored.get("end", ""),
+                        status="skipped_ignore",
+                    )
                 )
-            )
-            frame_index += 1
-            continue
-
-        if was_ignored and params.get("reset_diff_after_ignore", True):
-            previous_diff_frame = None
-            previous_saved_timestamp = None
-            was_ignored = False
-
-        processed = _prepare_for_output(frame, int(params["crop_bottom"]), int(params["min_width"]))
-        diff_frame = _prepare_for_diff(processed, int(params["resize_width_for_diff"]))
-        diff_score = None if previous_diff_frame is None else _gray_mean_absdiff(previous_diff_frame, diff_frame)
-        force_gap = previous_saved_timestamp is not None and (timestamp - previous_saved_timestamp) >= float(params["max_gap"])
-
-        if first_valid:
-            reason = "first"
-        elif previous_diff_frame is None:
-            reason = "first_after_ignore"
-        elif force_gap:
-            reason = "force_gap"
-        elif diff_score is not None and diff_score >= float(params["diff_threshold"]):
-            reason = "diff"
-        else:
-            reason = ""
-
-        if reason:
+                continue
+            cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
+            ok, frame = cap.read()
+            if not ok:
+                rows.append(_base_row(video, frame_index, timestamp, status="error", error="cannot retrieve keyframe"))
+                continue
+            processed = _prepare_for_output(frame, int(params["crop_bottom"]), int(params["min_width"]))
             filename = f"{video.episode_id}_f{frame_index:010d}_t{timestamp_token(timestamp)}.png"
             output_path = output_dir / filename
             success = cv2.imwrite(str(output_path), processed, [cv2.IMWRITE_PNG_COMPRESSION, png_compression])
@@ -144,28 +141,257 @@ def extract_frames_for_video(
             error = "" if success else "cv2.imwrite failed"
             if success:
                 saved_count += 1
-                previous_saved_timestamp = timestamp
-                previous_diff_frame = diff_frame
-                first_valid = False
             rows.append(
                 _base_row(
                     video,
                     frame_index,
                     timestamp,
                     image=filename if success else "",
-                    diff_score=diff_score,
-                    reason=reason,
+                    reason="keyframe",
                     output_path=relative_to_or_absolute(output_path, work_dir) if success else "",
                     status=status,
                     error=error,
                 )
             )
-        else:
-            rows.append(_base_row(video, frame_index, timestamp, diff_score=diff_score, status="skipped_diff"))
-        frame_index += 1
+    else:
+        fps = cap.get(cv2.CAP_PROP_FPS) or video.fps or 24.0
+        frame_step = max(1, int(round(float(params["interval"]) * fps)))
+        frame_index = 0
+        while True:
+            if stop_state and stop_state.get("stop"):
+                break
+            ok = cap.grab()
+            if not ok:
+                break
+            if frame_index % frame_step != 0:
+                frame_index += 1
+                continue
+            ok, frame = cap.retrieve()
+            if not ok:
+                rows.append(_base_row(video, frame_index, frame_index / fps, status="error", error="cannot retrieve frame"))
+                frame_index += 1
+                continue
+            timestamp = frame_index / fps
+            ignored = match_ignore(timestamp, ranges)
+            if ignored:
+                rows.append(
+                    _base_row(
+                        video,
+                        frame_index,
+                        timestamp,
+                        ignored=True,
+                        ignore_label=ignored.get("label", ""),
+                        ignore_start=ignored.get("start", ""),
+                        ignore_end=ignored.get("end", ""),
+                        status="skipped_ignore",
+                    )
+                )
+                frame_index += 1
+                continue
+
+            processed = _prepare_for_output(frame, int(params["crop_bottom"]), int(params["min_width"]))
+
+            if group_start_ts is not None and (timestamp - group_start_ts) >= group_max_duration:
+                group_index, saved_delta = _finalize_group(
+                    group_frames,
+                    video,
+                    work_dir,
+                    output_dir,
+                    png_compression,
+                    rng,
+                    group_index,
+                    group_seconds_per_keep,
+                    rows,
+                )
+                saved_count += saved_delta
+                group_start_ts = None
+                last_group_hash = None
+
+            frame_hash = _phash_frame(processed, params)
+            if last_group_hash is None or (frame_hash - last_group_hash) > phash_threshold:
+                group_index, saved_delta = _finalize_group(
+                    group_frames,
+                    video,
+                    work_dir,
+                    output_dir,
+                    png_compression,
+                    rng,
+                    group_index,
+                    group_seconds_per_keep,
+                    rows,
+                )
+                saved_count += saved_delta
+                group_start_ts = timestamp
+                last_group_hash = frame_hash
+                group_frames = []
+            else:
+                last_group_hash = frame_hash
+
+            group_frames.append(
+                _PendingFrame(
+                    frame_index=frame_index,
+                    timestamp=timestamp,
+                    processed=processed,
+                    diff_score=None,
+                    reason="phash",
+                )
+            )
+
+            frame_index += 1
+
+        group_index, saved_delta = _finalize_group(
+            group_frames,
+            video,
+            work_dir,
+            output_dir,
+            png_compression,
+            rng,
+            group_index,
+            group_seconds_per_keep,
+            rows,
+        )
+        saved_count += saved_delta
 
     cap.release()
     return saved_count, rows
+
+
+@dataclass
+class _PendingFrame:
+    frame_index: int
+    timestamp: float
+    processed: np.ndarray
+    diff_score: float | None
+    reason: str
+
+
+def _finalize_group(
+    group_frames: list[_PendingFrame],
+    video: VideoInfo,
+    work_dir: Path,
+    output_dir: Path,
+    png_compression: int,
+    rng: random.Random,
+    group_index: int,
+    group_seconds_per_keep: float,
+    rows: list[dict[str, object]],
+) -> tuple[int, int]:
+    if not group_frames:
+        return group_index, 0
+    group_index += 1
+    saved_count = 0
+    duration = max(0.0, group_frames[-1].timestamp - group_frames[0].timestamp)
+    keep_count = max(1, int(math.ceil(duration / max(0.1, group_seconds_per_keep))))
+    keep_count = min(keep_count, len(group_frames))
+    keep_indices = set(rng.sample(range(len(group_frames)), keep_count))
+    for index, item in enumerate(group_frames):
+        filename = f"{video.episode_id}_f{item.frame_index:010d}_t{timestamp_token(item.timestamp)}.png"
+        output_path = output_dir / filename
+        if index in keep_indices:
+            success = cv2.imwrite(str(output_path), item.processed, [cv2.IMWRITE_PNG_COMPRESSION, png_compression])
+            status = "saved" if success else "error"
+            error = "" if success else "cv2.imwrite failed"
+            if success:
+                saved_count += 1
+                rows.append(
+                    _base_row(
+                        video,
+                        item.frame_index,
+                        item.timestamp,
+                        image=filename,
+                        diff_score=item.diff_score,
+                        reason=item.reason,
+                        output_path=relative_to_or_absolute(output_path, work_dir),
+                        status=status,
+                        error=error,
+                    )
+                )
+            else:
+                rows.append(
+                    _base_row(
+                        video,
+                        item.frame_index,
+                        item.timestamp,
+                        diff_score=item.diff_score,
+                        reason=item.reason,
+                        status=status,
+                        error=error,
+                    )
+                )
+        else:
+            rows.append(
+                _base_row(
+                    video,
+                    item.frame_index,
+                    item.timestamp,
+                    diff_score=item.diff_score,
+                    reason=item.reason,
+                    status="skipped_dedup",
+                )
+            )
+    group_frames.clear()
+    return group_index, saved_count
+
+
+def _phash_frame(frame: np.ndarray, params: dict[str, Any]) -> imagehash.ImageHash:
+    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    image = _crop_for_hash(image, str(params.get("phash_crop", "center")))
+    resize_width = int(params.get("phash_resize_width", 256))
+    if resize_width > 0 and image.width > resize_width:
+        height = max(1, round(image.height * resize_width / image.width))
+        image = image.resize((resize_width, height))
+    return imagehash.phash(image, hash_size=int(params.get("phash_size", 8)))
+
+
+def _crop_for_hash(image: Image.Image, mode: str) -> Image.Image:
+    if mode != "center":
+        return image
+    width, height = image.size
+    crop_width = int(width * 0.6)
+    crop_height = int(height * 0.6)
+    left = (width - crop_width) // 2
+    top = (height - crop_height) // 2
+    return image.crop((left, top, left + crop_width, top + crop_height))
+
+
+def _probe_keyframe_timestamps(video_path: Path) -> list[tuple[int, float]]:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_frames",
+        "-show_entries",
+        "frame=key_frame,best_effort_timestamp_time,pts_time,pkt_pts_time",
+        "-of",
+        "json",
+        str(video_path),
+    ]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        payload = json.loads(result.stdout)
+    except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+        return []
+    timestamps: list[tuple[int, float]] = []
+    index = 0
+    for frame in payload.get("frames", []):
+        if str(frame.get("key_frame", "")) != "1":
+            continue
+        ts_text = (
+            frame.get("best_effort_timestamp_time")
+            or frame.get("pts_time")
+            or frame.get("pkt_pts_time")
+        )
+        if ts_text is None:
+            continue
+        try:
+            timestamp = float(ts_text)
+        except (TypeError, ValueError):
+            continue
+        timestamps.append((index, timestamp))
+        index += 1
+    return timestamps
 
 
 def _prepare_for_output(frame: np.ndarray, crop_bottom: int, min_width: int) -> np.ndarray:
@@ -177,18 +403,6 @@ def _prepare_for_output(frame: np.ndarray, crop_bottom: int, min_width: int) -> 
         output = cv2.resize(output, (min_width, int(round(output.shape[0] * scale))), interpolation=cv2.INTER_CUBIC)
     return output
 
-
-def _prepare_for_diff(frame: np.ndarray, resize_width: int) -> np.ndarray:
-    if resize_width > 0 and frame.shape[1] != resize_width:
-        scale = resize_width / frame.shape[1]
-        frame = cv2.resize(frame, (resize_width, max(1, int(round(frame.shape[0] * scale)))), interpolation=cv2.INTER_AREA)
-    return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-
-def _gray_mean_absdiff(previous: np.ndarray, current: np.ndarray) -> float:
-    if previous.shape != current.shape:
-        current = cv2.resize(current, (previous.shape[1], previous.shape[0]), interpolation=cv2.INTER_AREA)
-    return float(np.mean(cv2.absdiff(previous, current)))
 
 
 def _base_row(

@@ -14,7 +14,6 @@ from .ignore_ranges import load_ignore_state
 def summarize_project(work_dir: Path, config: dict[str, Any]) -> dict[str, object]:
     paths = config["paths"]
     frames_raw = collect_images(resolve_work_path(work_dir, paths["frames_raw"]))
-    frames_dedup = collect_images(resolve_work_path(work_dir, paths["frames_dedup"]))
     crops_dir = resolve_work_path(work_dir, paths["crops"])
     ignore_state = load_ignore_state(work_dir)
     crop_counts = _crop_counts(crops_dir)
@@ -22,7 +21,6 @@ def summarize_project(work_dir: Path, config: dict[str, Any]) -> dict[str, objec
         "work_dir": str(work_dir),
         "ignore_ranges": sum(len(item.get("ignore_ranges", [])) for item in ignore_state.get("episodes", [])),
         "frames_raw": len(frames_raw),
-        "frames_dedup": len(frames_dedup),
         "crops_total": sum(crop_counts.values()),
         **crop_counts,
     }
