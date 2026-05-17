@@ -44,13 +44,6 @@ OUTPUT_SIZE_PRESETS = {
 
 CROP_MODES = ("full", "face", "body", "halfbody", "random_crop")
 
-FALLBACKS = {
-    "face": ("halfbody", "body", "random_crop", "full"),
-    "halfbody": ("body", "face", "random_crop", "full"),
-    "body": ("halfbody", "face", "random_crop", "full"),
-    "random_crop": ("full",),
-}
-
 CROP_LOG_FIELDS = [
     "source_image",
     "output_image",
@@ -234,21 +227,6 @@ def _build_candidates(
         produced = _produce_candidates(crop_type, crop_type, image, config, rng, detections, False, "")
         if produced:
             candidates.extend(produced)
-            continue
-        for fallback_type in FALLBACKS.get(crop_type, ()):
-            fallback = _produce_candidates(
-                crop_type,
-                fallback_type,
-                image,
-                config,
-                rng,
-                detections,
-                True,
-                f"{crop_type}_to_{fallback_type}",
-            )
-            if fallback:
-                candidates.extend(fallback)
-                break
     return candidates
 
 

@@ -162,7 +162,7 @@ def test_ratio_candidates_filter_extreme_reverse_aspects(tmp_path: Path):
     assert "1:1" in _rank_ratios_by_bbox(2.0, config)
 
 
-def test_face_falls_back_to_halfbody_bbox(tmp_path: Path, monkeypatch):
+def test_face_does_not_fallback_without_face_detection(tmp_path: Path, monkeypatch):
     config, _ = initialize_work_dir(tmp_path)
     image_path = tmp_path / "frames_raw" / "ep01_f0000000001_t000001.000.png"
     _save_image(image_path, (40, 50, 60), (640, 960))
@@ -191,9 +191,6 @@ def test_face_falls_back_to_halfbody_bbox(tmp_path: Path, monkeypatch):
 
     saved, rows = crop_one_image(tmp_path, config, image_path, tmp_path / "crops", random.Random(42))
 
-    assert saved == 1
-    row = rows[0]
-    assert row["crop_type"] == "face"
-    assert row["producer_type"] == "halfbody"
-    assert row["fallback_used"] is True
-    assert row["fallback_reason"] == "face_to_halfbody"
+    assert saved == 0
+    assert rows[-1]["status"] == "skipped"
+    assert rows[-1]["reason"] == "no_candidate"
