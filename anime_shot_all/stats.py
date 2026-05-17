@@ -40,7 +40,5 @@ def recent_log_text(path: Path, max_rows: int = 20) -> str:
 
 
 def _crop_counts(crops_dir: Path) -> dict[str, int]:
-    keys = ["face", "body", "background", "full", "random_crop"]
-    counts = {key: len(collect_images(crops_dir / key)) for key in keys}
-    counts["hard_split"] = len(collect_images(crops_dir / "hard"))
-    return counts
+    keys = ["face", "body", "halfbody", "full", "random_crop"]
+    return {key: len(collect_images(crops_dir / key)) for key in keys}

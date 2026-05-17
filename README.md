@@ -59,6 +59,8 @@ video_dir/
 - 不实现 OP / ED 自动识别、单独目录、单独去重或单独裁剪。
 - 截帧支持关键帧模式（此时忽略 interval / max_gap / 去重分组）。
 - 语义裁剪使用 `dghs-imgutils` 的 face / person / halfbody 检测，不再由本工具直接管理检测模型权重。
+- 裁剪采用 bbox-first 流程：`full` 保留完整画面并按面积缩放，`face` / `body` / `halfbody` / `random_crop` 先生成 bbox，再按 bbox 比例加权随机选择输出比例和内置尺寸预设。
+- 非 `full` 裁剪输出面积固定限制在 `1024²` 到 `1536²` 之间，输出尺寸来自程序内置预设表；`1:1` 对横竖 bbox 都允许，但距离 bbox 比例越远权重越低。
 - 所有阶段都采用复制或生成新文件，不删除源视频或源图片。
 
 ## 验证

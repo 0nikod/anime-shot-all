@@ -38,8 +38,6 @@ from .video import VideoInfo, probe_video, video_candidates, videos_as_dicts, vi
 
 IGNORE_HEADERS = ["episode_id", "video_name", "ignore_start", "ignore_end", "label", "enabled", "notes"]
 VIDEO_HEADERS = ["episode_id", "video_path", "video_name", "duration_sec", "fps", "width", "height"]
-ASPECT_OPTIONS = ["original", "square", "portrait_2_3", "portrait_3_4", "portrait_9_16", "landscape_16_9", "landscape_4_3", "random"]
-
 PARAM_SCHEMA: dict[str, dict[str, Any]] = {
     "extract_output": {"component": "textbox", "label": "输出 frames_raw 文件夹", "info": "PNG 截帧保存目录（已包含去重输出）。"},
     "interval": {"component": "number", "label": "interval", "value": 0.25, "info": "采样间隔秒数；越小检查越频繁。"},
@@ -56,14 +54,12 @@ PARAM_SCHEMA: dict[str, dict[str, Any]] = {
     "extract_random_seed": {"component": "number", "label": "extract_random_seed", "value": 42, "info": "截帧分组随机抽取的随机种子。"},
     "crop_input": {"component": "textbox", "label": "输入图片文件夹", "info": "通常为 frames_raw。"},
     "crop_output": {"component": "textbox", "label": "输出 crops 文件夹", "info": "最终 PNG 裁剪输出目录。"},
-    "crop_mode": {"component": "checkbox_group", "label": "输出类型", "choices": ["full", "hard_split", "face", "body", "halfbody", "background", "random_crop"], "value": ["full", "hard_split", "face", "body", "halfbody", "background", "random_crop"], "info": "未勾选的类型不会输出，也不会触发对应检测。"},
+    "crop_mode": {"component": "checkbox_group", "label": "输出类型", "choices": ["full", "face", "body", "halfbody", "random_crop"], "value": ["full", "face", "body", "halfbody", "random_crop"], "info": "未勾选的类型不会输出，也不会触发对应检测。"},
     "output_strategy": {"component": "dropdown", "label": "输出策略", "value": "fixed", "choices": ["fixed", "random_weighted"], "info": "fixed 全部尝试；random_weighted 按权重抽样。"},
     "weight_full": {"component": "number", "label": "full weight", "value": 0, "info": "随机策略下 full 权重。"},
-    "weight_hard": {"component": "number", "label": "hard_split weight", "value": 0, "info": "随机策略下硬裁权重。"},
     "weight_face": {"component": "number", "label": "face weight", "value": 30, "info": "随机策略下脸部权重。"},
     "weight_body": {"component": "number", "label": "body weight", "value": 30, "info": "随机策略下身体权重。"},
     "weight_halfbody": {"component": "number", "label": "halfbody weight", "value": 25, "info": "随机策略下上半身权重。"},
-    "weight_background": {"component": "number", "label": "background weight", "value": 20, "info": "随机策略下背景权重。"},
     "weight_random": {"component": "number", "label": "random_crop weight", "value": 20, "info": "随机策略下随机裁剪权重。"},
     "conf_threshold": {"component": "number", "label": "conf_threshold", "value": 0.35, "info": "imgutils 检测置信度阈值。"},
     "iou_threshold": {"component": "number", "label": "iou_threshold", "value": 0.7, "info": "imgutils 检测 NMS IoU 阈值。"},
@@ -73,21 +69,20 @@ PARAM_SCHEMA: dict[str, dict[str, Any]] = {
     "person_version": {"component": "dropdown", "label": "person version", "value": "v1.1", "choices": ["v0", "v1", "v1.1"], "info": "imgutils person 检测模型版本。"},
     "halfbody_level": {"component": "dropdown", "label": "halfbody level", "value": "s", "choices": ["n", "s"], "info": "n 更快，s 更准。"},
     "halfbody_version": {"component": "dropdown", "label": "halfbody version", "value": "v1.0", "choices": ["v1.0"], "info": "imgutils halfbody 检测模型版本。"},
-    "face_aspect": {"component": "dropdown", "label": "face aspect", "value": "square", "choices": ASPECT_OPTIONS, "info": "face 输出比例。"},
-    "body_aspect": {"component": "dropdown", "label": "body aspect", "value": "portrait_2_3", "choices": ASPECT_OPTIONS, "info": "body 输出比例。"},
-    "halfbody_aspect": {"component": "dropdown", "label": "halfbody aspect", "value": "portrait_3_4", "choices": ASPECT_OPTIONS, "info": "halfbody 输出比例。"},
-    "background_aspect": {"component": "dropdown", "label": "background aspect", "value": "landscape_16_9", "choices": ASPECT_OPTIONS, "info": "background 输出比例。"},
+    "ratio_sigma": {"component": "number", "label": "ratio sigma", "value": 0.45, "info": "越小越贴近 bbox 原始比例。"},
+    "max_ratio_change": {"component": "number", "label": "max ratio change", "value": 2.2, "info": "非 1:1 候选比例允许偏离 bbox 的最大倍数。"},
+    "always_allow_square": {"component": "checkbox", "label": "always allow 1:1", "value": True, "info": "横竖 bbox 都允许少量输出正方形。"},
+    "full_max_upscale": {"component": "number", "label": "full max upscale", "value": 2.0, "info": "full 模式小图最大放大倍数。"},
     "random_seed": {"component": "number", "label": "random seed", "value": 42, "info": "控制随机裁剪和随机输出复现。"},
-    "random_aspect_pool": {"component": "checkbox_group", "label": "random crop aspect pool", "choices": ["1:1", "2:3", "3:4", "9:16", "16:9", "4:3"], "value": ["1:1", "2:3", "16:9"], "info": "随机裁剪可选比例池。"},
-    "face_padding": {"component": "number", "label": "face_padding", "value": 0.5, "info": "脸部框外扩比例，避免只裁五官。"},
-    "body_padding_x": {"component": "number", "label": "body_padding_x", "value": 0.18, "info": "身体框水平外扩比例。"},
-    "body_padding_y": {"component": "number", "label": "body_padding_y", "value": 0.25, "info": "身体框垂直外扩比例。"},
-    "halfbody_padding_x": {"component": "number", "label": "halfbody_padding_x", "value": 0.16, "info": "上半身框水平外扩比例。"},
-    "halfbody_padding_y": {"component": "number", "label": "halfbody_padding_y", "value": 0.20, "info": "上半身框垂直外扩比例。"},
-    "background_exclusion_padding": {"component": "number", "label": "background_exclusion_padding", "value": 0.15, "info": "人物禁区外扩比例。"},
-    "background_max_overlap": {"component": "number", "label": "background_max_overlap", "value": 0.05, "info": "背景 crop 允许重叠上限。"},
+    "face_expand_top": {"component": "number", "label": "face_expand_top", "value": 1.5, "info": "脸部 bbox 向上外扩倍数。"},
+    "face_expand_bottom": {"component": "number", "label": "face_expand_bottom", "value": 2.0, "info": "脸部 bbox 向下外扩倍数。"},
+    "face_expand_lr": {"component": "number", "label": "face_expand_lr", "value": 1.4, "info": "脸部 bbox 左右外扩倍数。"},
+    "body_expand_tb": {"component": "number", "label": "body_expand_tb", "value": 1.15, "info": "身体 bbox 上下外扩倍数。"},
+    "body_expand_lr": {"component": "number", "label": "body_expand_lr", "value": 1.2, "info": "身体 bbox 左右外扩倍数。"},
+    "halfbody_expand_top": {"component": "number", "label": "halfbody_expand_top", "value": 1.2, "info": "半身 bbox 向上外扩倍数。"},
+    "halfbody_expand_bottom": {"component": "number", "label": "halfbody_expand_bottom", "value": 1.25, "info": "半身 bbox 向下外扩倍数。"},
+    "halfbody_expand_lr": {"component": "number", "label": "halfbody_expand_lr", "value": 1.2, "info": "半身 bbox 左右外扩倍数。"},
     "min_crop_size": {"component": "number", "label": "min_crop_size", "value": 128, "info": "小于该尺寸的 crop 跳过。"},
-    "max_side": {"component": "number", "label": "max_side", "value": 2048, "info": "输出最长边上限。"},
     "crop_png_compression": {"component": "slider", "label": "png_compression", "value": 3, "minimum": 0, "maximum": 9, "step": 1, "info": "裁剪 PNG 压缩等级。"},
     "target_crops_per_image": {"component": "number", "label": "target_crops_per_image", "value": 3, "info": "随机权重策略每图最多输出数。"},
 }
@@ -221,22 +216,18 @@ def build_app() -> gr.Blocks:
                     [
                         "output_strategy",
                         "weight_full",
-                        "weight_hard",
                         "weight_face",
                         "weight_body",
                         "weight_halfbody",
-                        "weight_background",
                         "weight_random",
                     ],
-                    columns=4,
+                    columns=3,
                 )
                 output_strategy = strategy_params["output_strategy"]
                 weight_full = strategy_params["weight_full"]
-                weight_hard = strategy_params["weight_hard"]
                 weight_face = strategy_params["weight_face"]
                 weight_body = strategy_params["weight_body"]
                 weight_halfbody = strategy_params["weight_halfbody"]
-                weight_background = strategy_params["weight_background"]
                 weight_random = strategy_params["weight_random"]
             with gr.Accordion("imgutils 检测参数", open=False):
                 detection_params = _param_controls(
@@ -260,43 +251,42 @@ def build_app() -> gr.Blocks:
                 person_version = detection_params["person_version"]
                 halfbody_level = detection_params["halfbody_level"]
                 halfbody_version = detection_params["halfbody_version"]
-            with gr.Accordion("比例与随机参数", open=False):
+            with gr.Accordion("自动比例与随机参数", open=False):
                 aspect_params = _param_controls(
-                    ["face_aspect", "body_aspect", "halfbody_aspect", "background_aspect", "random_seed"],
-                    columns=4,
+                    ["ratio_sigma", "max_ratio_change", "always_allow_square", "full_max_upscale", "random_seed"],
+                    columns=3,
                 )
-                face_aspect = aspect_params["face_aspect"]
-                body_aspect = aspect_params["body_aspect"]
-                halfbody_aspect = aspect_params["halfbody_aspect"]
-                background_aspect = aspect_params["background_aspect"]
+                ratio_sigma = aspect_params["ratio_sigma"]
+                max_ratio_change = aspect_params["max_ratio_change"]
+                always_allow_square = aspect_params["always_allow_square"]
+                full_max_upscale = aspect_params["full_max_upscale"]
                 random_seed = aspect_params["random_seed"]
-                random_aspect_pool = _param_component("random_aspect_pool")
             with gr.Accordion("裁剪尺寸与边距", open=False):
                 crop_size_params = _param_controls(
                     [
-                        "face_padding",
-                        "body_padding_x",
-                        "body_padding_y",
-                        "halfbody_padding_x",
-                        "halfbody_padding_y",
-                        "background_exclusion_padding",
-                        "background_max_overlap",
+                        "face_expand_top",
+                        "face_expand_bottom",
+                        "face_expand_lr",
+                        "body_expand_tb",
+                        "body_expand_lr",
+                        "halfbody_expand_top",
+                        "halfbody_expand_bottom",
+                        "halfbody_expand_lr",
                         "min_crop_size",
-                        "max_side",
                         "crop_png_compression",
                         "target_crops_per_image",
                     ],
                     columns=3,
                 )
-                face_padding = crop_size_params["face_padding"]
-                body_padding_x = crop_size_params["body_padding_x"]
-                body_padding_y = crop_size_params["body_padding_y"]
-                halfbody_padding_x = crop_size_params["halfbody_padding_x"]
-                halfbody_padding_y = crop_size_params["halfbody_padding_y"]
-                background_exclusion_padding = crop_size_params["background_exclusion_padding"]
-                background_max_overlap = crop_size_params["background_max_overlap"]
+                face_expand_top = crop_size_params["face_expand_top"]
+                face_expand_bottom = crop_size_params["face_expand_bottom"]
+                face_expand_lr = crop_size_params["face_expand_lr"]
+                body_expand_tb = crop_size_params["body_expand_tb"]
+                body_expand_lr = crop_size_params["body_expand_lr"]
+                halfbody_expand_top = crop_size_params["halfbody_expand_top"]
+                halfbody_expand_bottom = crop_size_params["halfbody_expand_bottom"]
+                halfbody_expand_lr = crop_size_params["halfbody_expand_lr"]
                 min_crop_size = crop_size_params["min_crop_size"]
-                max_side = crop_size_params["max_side"]
                 crop_png_compression = crop_size_params["crop_png_compression"]
                 target_crops_per_image = crop_size_params["target_crops_per_image"]
             with gr.Row():
@@ -330,18 +320,15 @@ def build_app() -> gr.Blocks:
             crop_mode,
             output_strategy,
             weight_full,
-            weight_hard,
             weight_face,
             weight_body,
             weight_halfbody,
-            weight_background,
             weight_random,
-            face_aspect,
-            body_aspect,
-            halfbody_aspect,
-            background_aspect,
+            ratio_sigma,
+            max_ratio_change,
+            always_allow_square,
+            full_max_upscale,
             random_seed,
-            random_aspect_pool,
             conf_threshold,
             iou_threshold,
             face_level,
@@ -350,15 +337,15 @@ def build_app() -> gr.Blocks:
             person_version,
             halfbody_level,
             halfbody_version,
-            face_padding,
-            body_padding_x,
-            body_padding_y,
-            halfbody_padding_x,
-            halfbody_padding_y,
-            background_exclusion_padding,
-            background_max_overlap,
+            face_expand_top,
+            face_expand_bottom,
+            face_expand_lr,
+            body_expand_tb,
+            body_expand_lr,
+            halfbody_expand_top,
+            halfbody_expand_bottom,
+            halfbody_expand_lr,
             min_crop_size,
-            max_side,
             crop_png_compression,
             target_crops_per_image,
         ]
@@ -662,18 +649,15 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
         crop_mode,
         output_strategy,
         weight_full,
-        weight_hard,
         weight_face,
         weight_body,
         weight_halfbody,
-        weight_background,
         weight_random,
-        face_aspect,
-        body_aspect,
-        halfbody_aspect,
-        background_aspect,
+        ratio_sigma,
+        max_ratio_change,
+        always_allow_square,
+        full_max_upscale,
         random_seed,
-        random_aspect_pool,
         conf_threshold,
         iou_threshold,
         face_level,
@@ -682,15 +666,15 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
         person_version,
         halfbody_level,
         halfbody_version,
-        face_padding,
-        body_padding_x,
-        body_padding_y,
-        halfbody_padding_x,
-        halfbody_padding_y,
-        background_exclusion_padding,
-        background_max_overlap,
+        face_expand_top,
+        face_expand_bottom,
+        face_expand_lr,
+        body_expand_tb,
+        body_expand_lr,
+        halfbody_expand_top,
+        halfbody_expand_bottom,
+        halfbody_expand_lr,
         min_crop_size,
-        max_side,
         crop_png_compression,
         target_crops_per_image,
     ) = values
@@ -720,20 +704,25 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
             "output_strategy": output_strategy,
             "random_seed": int(random_seed),
             "min_crop_size": int(min_crop_size),
-            "max_side": int(max_side),
             "png_compression": int(crop_png_compression),
             "target_crops_per_image": int(target_crops_per_image),
         }
     )
-    cfg["crop_types"] = {key: key in (crop_mode or []) for key in ["full", "hard_split", "face", "body", "halfbody", "background", "random_crop"]}
+    cfg.setdefault("full_crop", {})["max_upscale"] = float(full_max_upscale)
+    cfg.setdefault("ratio_selection", {}).update(
+        {
+            "sigma": float(ratio_sigma),
+            "max_ratio_change": float(max_ratio_change),
+            "always_allow_square": bool(always_allow_square),
+        }
+    )
+    cfg["crop_types"] = {key: key in (crop_mode or []) for key in ["full", "face", "body", "halfbody", "random_crop"]}
     cfg["random_output_weights"].update(
         {
             "full": int(weight_full),
-            "hard_split": int(weight_hard),
             "face": int(weight_face),
             "body": int(weight_body),
             "halfbody": int(weight_halfbody),
-            "background": int(weight_background),
             "random_crop": int(weight_random),
         }
     )
@@ -749,24 +738,38 @@ def _apply_gui_values(config: dict[str, Any], values: tuple[Any, ...]) -> dict[s
             "halfbody_version": halfbody_version,
         }
     )
-    cfg["face_crop"]["padding"] = float(face_padding)
-    cfg["face_crop"]["aspect_mode"] = face_aspect
-    cfg["body_crop"]["padding_x"] = float(body_padding_x)
-    cfg["body_crop"]["padding_y"] = float(body_padding_y)
-    cfg["body_crop"]["aspect_mode"] = body_aspect
+    cfg["face_crop"].update(
+        {
+            "expand_top": float(face_expand_top),
+            "expand_bottom": float(face_expand_bottom),
+            "expand_left": float(face_expand_lr),
+            "expand_right": float(face_expand_lr),
+        }
+    )
+    cfg["body_crop"].update(
+        {
+            "expand_top": float(body_expand_tb),
+            "expand_bottom": float(body_expand_tb),
+            "expand_left": float(body_expand_lr),
+            "expand_right": float(body_expand_lr),
+        }
+    )
     cfg.setdefault("halfbody_crop", {})
-    cfg["halfbody_crop"]["padding_x"] = float(halfbody_padding_x)
-    cfg["halfbody_crop"]["padding_y"] = float(halfbody_padding_y)
-    cfg["halfbody_crop"]["aspect_mode"] = halfbody_aspect
-    cfg["background_crop"]["exclusion_padding"] = float(background_exclusion_padding)
-    cfg["background_crop"]["max_overlap"] = float(background_max_overlap)
-    cfg["background_crop"]["aspect_mode"] = background_aspect
-    cfg["random_crop"]["aspect_pool"] = random_aspect_pool or ["1:1"]
+    cfg["halfbody_crop"].update(
+        {
+            "expand_top": float(halfbody_expand_top),
+            "expand_bottom": float(halfbody_expand_bottom),
+            "expand_left": float(halfbody_expand_lr),
+            "expand_right": float(halfbody_expand_lr),
+        }
+    )
     return cfg
 
 
 def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
-    enabled_types = [key for key, value in config["crop_types"].items() if value]
+    enabled_types = [key for key in ["full", "face", "body", "halfbody", "random_crop"] if config["crop_types"].get(key)]
+    ratio_selection = config.get("ratio_selection", {})
+    full_crop = config.get("full_crop", {})
     return (
         config["project"].get("video_dir", "videos"),
         config["paths"]["frames_raw"],
@@ -787,18 +790,15 @@ def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
         enabled_types,
         config["crop"]["output_strategy"],
         config["random_output_weights"]["full"],
-        config["random_output_weights"]["hard_split"],
         config["random_output_weights"]["face"],
         config["random_output_weights"]["body"],
         config["random_output_weights"].get("halfbody", 25),
-        config["random_output_weights"]["background"],
         config["random_output_weights"]["random_crop"],
-        config["face_crop"]["aspect_mode"],
-        config["body_crop"]["aspect_mode"],
-        config.get("halfbody_crop", {}).get("aspect_mode", "portrait_3_4"),
-        config["background_crop"]["aspect_mode"],
+        ratio_selection.get("sigma", 0.45),
+        ratio_selection.get("max_ratio_change", 2.2),
+        ratio_selection.get("always_allow_square", True),
+        full_crop.get("max_upscale", 2.0),
         config["crop"]["random_seed"],
-        config["random_crop"]["aspect_pool"],
         config.get("detection", {}).get("conf_threshold", 0.35),
         config.get("detection", {}).get("iou_threshold", 0.7),
         config.get("detection", {}).get("face_level", "s"),
@@ -807,15 +807,15 @@ def _values_from_config(config: dict[str, Any]) -> tuple[Any, ...]:
         config.get("detection", {}).get("person_version", "v1.1"),
         config.get("detection", {}).get("halfbody_level", "s"),
         config.get("detection", {}).get("halfbody_version", "v1.0"),
-        config["face_crop"]["padding"],
-        config["body_crop"]["padding_x"],
-        config["body_crop"]["padding_y"],
-        config.get("halfbody_crop", {}).get("padding_x", 0.16),
-        config.get("halfbody_crop", {}).get("padding_y", 0.20),
-        config["background_crop"]["exclusion_padding"],
-        config["background_crop"]["max_overlap"],
+        config["face_crop"].get("expand_top", 1.5),
+        config["face_crop"].get("expand_bottom", 2.0),
+        config["face_crop"].get("expand_left", 1.4),
+        config["body_crop"].get("expand_top", 1.15),
+        config["body_crop"].get("expand_left", 1.2),
+        config.get("halfbody_crop", {}).get("expand_top", 1.2),
+        config.get("halfbody_crop", {}).get("expand_bottom", 1.25),
+        config.get("halfbody_crop", {}).get("expand_left", 1.2),
         config["crop"]["min_crop_size"],
-        config["crop"]["max_side"],
         config["crop"]["png_compression"],
         config["crop"]["target_crops_per_image"],
     )
@@ -826,6 +826,3 @@ def _deep_copy_config(config: dict[str, Any]) -> dict[str, Any]:
 
     return copy.deepcopy(config)
 
-
-def _aspect_options() -> list[str]:
-    return list(ASPECT_OPTIONS)
