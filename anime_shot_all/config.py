@@ -13,7 +13,6 @@ from .defaults import builtin_defaults
 
 REQUIRED_DIR_KEYS = (
     "frames_raw",
-    "frames_dedup",
     "rejected_duplicates",
     "crops",
     "logs",

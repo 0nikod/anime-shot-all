@@ -135,7 +135,7 @@ def run_crop(
     progress: ProgressCallback | None = None,
 ) -> tuple[int, Path]:
     params = config["crop"]
-    input_dir = input_dir or resolve_work_path(work_dir, params.get("input_dir", "frames_dedup"))
+    input_dir = input_dir or resolve_work_path(work_dir, params.get("input_dir", "frames_raw"))
     output_dir = output_dir or resolve_work_path(work_dir, params.get("output_dir", "crops"))
     output_dir.mkdir(parents=True, exist_ok=True)
     rng = random.Random(int(params.get("random_seed", 42)))

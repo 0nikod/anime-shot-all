@@ -29,7 +29,6 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     },
     "paths": {
         "frames_raw": "frames_raw",
-        "frames_dedup": "frames_dedup",
         "rejected_duplicates": "rejected_duplicates",
         "crops": "crops",
         "logs": "logs",

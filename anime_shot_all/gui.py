@@ -39,7 +39,7 @@ from .video import VideoInfo, probe_video, video_candidates, videos_as_dicts, vi
 IGNORE_HEADERS = ["episode_id", "video_name", "ignore_start", "ignore_end", "label", "enabled", "notes"]
 VIDEO_HEADERS = ["episode_id", "video_path", "video_name", "duration_sec", "fps", "width", "height"]
 PARAM_SCHEMA: dict[str, dict[str, Any]] = {
-    "extract_output": {"component": "textbox", "label": "输出 frames_raw 文件夹", "info": "PNG 截帧保存目录（已包含去重输出）。"},
+    "extract_output": {"component": "textbox", "label": "输出 frames_raw 文件夹", "info": "PNG 截帧保存目录。"},
     "interval": {"component": "number", "label": "interval", "value": 0.25, "info": "采样间隔秒数；越小检查越频繁。"},
     "keyframe_only": {"component": "checkbox", "label": "截关键帧", "value": False, "info": "关键帧模式会忽略 interval / 去重分组。"},
     "png_compression": {"component": "slider", "label": "png_compression", "value": 3, "minimum": 0, "maximum": 9, "step": 1, "info": "PNG 压缩等级；越高越慢。"},

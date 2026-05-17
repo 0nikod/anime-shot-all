@@ -15,6 +15,7 @@ def test_initialize_work_dir_creates_project_structure(tmp_path: Path):
     assert (tmp_path / "configs" / "default.yaml").exists()
     assert (tmp_path / "configs" / "params.yaml").exists()
     assert (tmp_path / "frames_raw").is_dir()
+    assert not (tmp_path / "frames_dedup").exists()
     assert (tmp_path.parent / "video_dir").is_dir()
     assert config["project"]["work_dir"] == str(tmp_path.resolve())
     assert config["project"]["video_dir"] == "../video_dir"

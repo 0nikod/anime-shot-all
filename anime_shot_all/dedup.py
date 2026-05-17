@@ -117,9 +117,7 @@ def keep_all_in_group(state: dict[str, Any], group_id: str) -> dict[str, Any]:
 def export_dedup_results(work_dir: Path, config: dict[str, Any], state: dict[str, Any] | None = None) -> tuple[int, int, Path]:
     params = config["dedup"]
     state = state or load_dedup_state(work_dir)
-    output_dir = resolve_work_path(work_dir, config["paths"]["frames_dedup"])
     rejected_dir = resolve_work_path(work_dir, config["paths"]["rejected_duplicates"])
-    output_dir.mkdir(parents=True, exist_ok=True)
     if params.get("export_rejected_duplicates", True):
         rejected_dir.mkdir(parents=True, exist_ok=True)
 
@@ -132,9 +130,6 @@ def export_dedup_results(work_dir: Path, config: dict[str, Any], state: dict[str
         error = ""
         try:
             if record["status"] in KEEP_STATUSES:
-                target = output_dir / source.name
-                shutil.copy2(source, target)
-                output = relative_to_or_absolute(target, work_dir)
                 kept_count += 1
             elif record["status"] in REJECT_STATUSES and params.get("export_rejected_duplicates", True):
                 target = rejected_dir / source.name
